@@ -1,13 +1,16 @@
-package entity;
+package com.myenterpriseos.myenterpriseopensource.entity;
 
-import enums.UserRole;
+import com.myenterpriseos.myenterpriseopensource.enums.UserRole;
 import jakarta.persistence.*;
-import lombok.Data;
+import lombok.*;
 
 
 @Entity
-@Data
+@Getter
+@Setter
 @Table(name = "app_user")
+@NoArgsConstructor
+@AllArgsConstructor
 public class AppUser {
 
     @Id

@@ -1,4 +1,4 @@
-package enums;
+package com.myenterpriseos.myenterpriseopensource.enums;
 
 public enum UserRole {
     ADMIN,
