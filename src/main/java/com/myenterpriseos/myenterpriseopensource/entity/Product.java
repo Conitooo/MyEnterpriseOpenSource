@@ -38,6 +38,6 @@ public class Product {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id", nullable = false)
-    private Company companyID;
+    private Company company;
 
 }

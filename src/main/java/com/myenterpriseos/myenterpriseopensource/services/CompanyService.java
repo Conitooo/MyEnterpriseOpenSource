@@ -1,18 +1,19 @@
 package com.myenterpriseos.myenterpriseopensource.services;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.myenterpriseos.myenterpriseopensource.dto.CompanyResponse;
+import com.myenterpriseos.myenterpriseopensource.dto.CreateCompanyRequest;
+import com.myenterpriseos.myenterpriseopensource.dto.UpdateCompanyRequest;
 import com.myenterpriseos.myenterpriseopensource.entity.Company;
 import com.myenterpriseos.myenterpriseopensource.exception.CompanyAlreadyActiveException;
 import com.myenterpriseos.myenterpriseopensource.exception.CompanyNotFoundException;
 import com.myenterpriseos.myenterpriseopensource.mapper.CompanyMapper;
 import com.myenterpriseos.myenterpriseopensource.repository.CompanyRepository;
-import com.myenterpriseos.myenterpriseopensource.dto.CompanyResponse;
-import com.myenterpriseos.myenterpriseopensource.dto.CreateCompanyRequest;
-import com.myenterpriseos.myenterpriseopensource.dto.UpdateCompanyRequest;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.time.LocalDateTime;
-import java.util.List;
 
 @Service
 public class CompanyService {
@@ -23,6 +24,7 @@ public class CompanyService {
         this.companyRepository = companyRepository;
     }
 
+    @Transactional
     public CompanyResponse createCompany(CreateCompanyRequest request) {
 
         Company company = CompanyMapper.toEntity(request);
@@ -59,7 +61,8 @@ public class CompanyService {
     @Transactional(readOnly = true)
     public CompanyResponse findCompanyById(Long id) {
 
-        Company company = companyRepository.findByIdAndDeletedAtIsNull(id)
+        Company company = companyRepository
+                .findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new CompanyNotFoundException(id));
 
         return CompanyMapper.toResponse(company);
@@ -75,9 +78,13 @@ public class CompanyService {
     }
 
     @Transactional
-    public CompanyResponse updateCompany(Long id, UpdateCompanyRequest request) {
+    public CompanyResponse updateCompany(
+            Long id,
+            UpdateCompanyRequest request
+    ) {
 
-        Company company = companyRepository.findByIdAndDeletedAtIsNull(id)
+        Company company = companyRepository
+                .findByIdAndDeletedAtIsNull(id)
                 .orElseThrow(() -> new CompanyNotFoundException(id));
 
         company.setName(request.name());
@@ -88,7 +95,7 @@ public class CompanyService {
     @Transactional(readOnly = true)
     public List<CompanyResponse> findDeletedCompanies() {
 
-        return companyRepository.findDeletedCompanies()
+        return companyRepository.findAllByDeletedAtIsNotNull()
                 .stream()
                 .map(CompanyMapper::toResponse)
                 .toList();
@@ -97,7 +104,8 @@ public class CompanyService {
     @Transactional(readOnly = true)
     public CompanyResponse findDeletedCompanyById(Long id) {
 
-        Company company = companyRepository.findDeletedCompanyById(id)
+        Company company = companyRepository
+                .findDeletedCompanyById(id)
                 .orElseThrow(() -> new CompanyNotFoundException(id));
 
         return CompanyMapper.toResponse(company);

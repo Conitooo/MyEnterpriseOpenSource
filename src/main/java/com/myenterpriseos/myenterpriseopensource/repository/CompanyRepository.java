@@ -12,7 +12,7 @@ public interface CompanyRepository extends JpaRepository<Company,Long> {
 
     List<Company> findAllByDeletedAtIsNull();
 
-    List<Company> findDeletedCompanies();
+    List<Company> findAllByDeletedAtIsNotNull();
 
     Optional<Company> findDeletedCompanyById(Long id);
 }
