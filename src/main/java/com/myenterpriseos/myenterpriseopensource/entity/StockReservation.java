@@ -3,7 +3,6 @@ package com.myenterpriseos.myenterpriseopensource.entity;
 import com.myenterpriseos.myenterpriseopensource.enums.ReservationStatus;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.PositiveOrZero;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;

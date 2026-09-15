@@ -105,7 +105,7 @@ public class CompanyService {
     public CompanyResponse findDeletedCompanyById(Long id) {
 
         Company company = companyRepository
-                .findDeletedCompanyById(id)
+                .findByIdAndDeletedAtIsNotNull(id)
                 .orElseThrow(() -> new CompanyNotFoundException(id));
 
         return CompanyMapper.toResponse(company);

@@ -9,7 +9,7 @@ public class ProductMapper {
     public static Product toEntity(ProductRequest request, Company company) {
         Product product = new Product();
 
-        product.setProductName(request.name());
+        product.setName(request.name());
         product.setPrice(request.price());
         product.setCurrency(request.currency());
         product.setSku(request.sku());
@@ -21,7 +21,7 @@ public class ProductMapper {
     public static ProductResponse toResponse(Product product) {
         return new ProductResponse(
                 product.getId(),
-                product.getProductName(),
+                product.getName(),
                 product.getSku(),
                 product.getPrice(),
                 product.getCurrency(),

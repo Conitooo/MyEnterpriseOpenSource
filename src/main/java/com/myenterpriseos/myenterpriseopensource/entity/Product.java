@@ -7,6 +7,8 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 @Table(name = "product")
 @Getter
 @Setter
+
 @NoArgsConstructor
 @AllArgsConstructor
 public class Product {
@@ -21,9 +24,9 @@ public class Product {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "product_name")
+    @Column(name = "product_name", nullable = false)
     @NotBlank
-    private String productName;
+    private String name;
 
     @Column(name = "sku", nullable = false)
     @NotBlank
@@ -33,7 +36,8 @@ public class Product {
     @PositiveOrZero
     private BigDecimal price;
 
-    @Column(name = "currency", nullable = false)
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "currency", nullable = false, length = 3)
     private String currency;
 
     @ManyToOne(fetch = FetchType.LAZY)
