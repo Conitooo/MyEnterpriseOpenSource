@@ -15,4 +15,5 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     @org.springframework.data.jpa.repository.Query("select u from AppUser u join fetch u.company where u.id = :id")
     java.util.Optional<AppUser> lockById(Long id);
     long countByCompanyIdAndRoleAndActiveTrue(Long companyId, com.myenterpriseos.myenterpriseopensource.enums.UserRole role);
+    java.util.List<AppUser> findByCompanyIdOrderByIdAsc(Long companyId);
 }

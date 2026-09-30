@@ -8,6 +8,7 @@ import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.Resource;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.http.HttpMethod;
@@ -48,6 +49,7 @@ public class SecurityConfig {
     PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(12); }
 
     @Bean
+    @Profile("!local")
     KeyPair jwtKeyPair(@Value("${app.security.jwt.private-key-location}") Resource privateResource,
                        @Value("${app.security.jwt.public-key-location}") Resource publicResource) throws Exception {
         KeyFactory factory = KeyFactory.getInstance("RSA");

@@ -5,4 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
     java.util.List<Shipment> findByOrderId(Long orderId);
+    boolean existsByOrderId(Long orderId);
 }

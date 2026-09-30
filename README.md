@@ -1,6 +1,6 @@
 # MyEnterpriseOpenSource
 
-Backend application for a B2B inventory, warehouse and order management system built with Java and Spring Boot.
+Aplicación B2B de inventario, almacenes y pedidos con backend Spring Boot y panel Angular.
 
 The goal of this project is to develop a production-oriented backend while practicing database design, transactions, concurrency, testing and backend architecture.
 
@@ -15,6 +15,9 @@ The goal of this project is to develop a production-oriented backend while pract
 - MySQL
 - Maven
 - Bean Validation
+- Spring Security con JWT
+- Docker Compose para MySQL local
+- Angular 21 y pnpm
 
 ## Current Features
 
@@ -36,8 +39,9 @@ The project currently includes:
 - Request validation and consistent HTTP errors
 - Transactional stock reservation, partial shipments and movement history
 - Automated unit and integration tests
+- Frontend Angular para probar el flujo completo desde el navegador
 
-The eleven entities and repositories are under `com.myenterpriseos.myenterpriseopensource` so Spring discovers them automatically.
+Las entidades y repositorios están bajo `com.myenterpriseos.myenterpriseopensource` para que Spring los descubra automáticamente.
 
 ## API
 
@@ -48,11 +52,13 @@ The eleven entities and repositories are under `com.myenterpriseos.myenterpriseo
 | POST / GET | `/api/warehouses/{warehouseId}/inventory` | Receive stock or list inventory |
 | POST | `/api/inventory/{inventoryId}/adjustments` | Adjust stock |
 | GET | `/api/inventory/{inventoryId}/movements` | View stock history |
-| POST | `/api/companies/{companyId}/orders` | Create a draft order |
+| POST / GET | `/api/companies/{companyId}/orders` | Create or list orders |
 | GET | `/api/orders/{orderId}` | View an order |
+| GET | `/api/orders/{orderId}/shipments` | List its shipments |
 | POST | `/api/orders/{orderId}/confirm` | Allocate and reserve all order lines |
 | POST | `/api/orders/{orderId}/cancel` | Cancel an unshipped order |
 | POST | `/api/orders/{orderId}/shipments` | Ship reserved items, including partial shipments |
+| GET | `/api/audit-events?page=0&size=50` | Ver operaciones auditadas de la empresa (solo ADMIN) |
 
 Confirmation requires `allocations` with `orderItemId`, `inventoryId`, and `quantity` for every order line. A shipment requires `warehouseId` and `items` with `orderItemId` and `quantity`. The service checks company ownership, available stock and order state inside database transactions. Inventory rows are locked while reserving or changing stock.
 
@@ -60,7 +66,7 @@ All API endpoints except login require a bearer JWT. The security layer checks t
 
 ## Authentication and authorization
 
-JWTs are signed with an externally configured RSA key pair of at least 3072 bits. The server validates the signature, issuer, audience and expiration. Access tokens last 15 minutes. Changing a password or deactivating an account invalidates its existing tokens immediately. Five failed logins lock an account for 15 minutes. Passwords use BCrypt; new passwords must contain at least 14 characters and fit within BCrypt's 72-byte UTF-8 limit.
+In the default `local` profile, an ephemeral RSA 3072-bit key pair is generated at startup. Restarting the backend invalidates previous JWTs. In `prod`, JWTs are signed with an externally configured RSA key pair of at least 3072 bits. The server validates the signature, issuer, audience and expiration. Access tokens last 15 minutes. Changing a password or deactivating an account invalidates its existing tokens immediately. Five failed logins lock an account for 15 minutes. Passwords use BCrypt; new passwords must contain at least 14 characters and fit within BCrypt's 72-byte UTF-8 limit.
 
 Generate a PKCS#8 RSA private key and matching public key, for example:
 
@@ -71,9 +77,11 @@ openssl pkey -in jwt-private.pem -pubout -out jwt-public.pem
 
 Keep the private key outside the repository with restricted file permissions. Set `JWT_PRIVATE_KEY_LOCATION` and `JWT_PUBLIC_KEY_LOCATION` to Spring resource locations (for example `file:C:/secure/jwt-private.pem`) and set `JWT_ISSUER` to a stable HTTPS issuer URI. The application fails to start if the keys or issuer are missing or the key pair is invalid. The PEM files under `src/test/resources` are test-only fixtures and must never be used outside tests.
 
-There is no public registration endpoint. To create the first administrator, start the application once with `APP_SECURITY_BOOTSTRAP_ENABLED=true`, `BOOTSTRAP_COMPANY_NAME`, `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`. For an existing company, use `BOOTSTRAP_COMPANY_ID` instead of the name. Remove the bootstrap variables after the account is created. Bootstrap only runs if no users exist.
+There is no public registration endpoint. In `local`, the first startup creates a demo company and admin with a random password in `.local/credentials.txt` (ignored by Git). This happens only when there are no users. The file is not regenerated for an existing database; keep the password you changed it to. In `prod`, create the first administrator by starting the application once with `APP_SECURITY_BOOTSTRAP_ENABLED=true`, `BOOTSTRAP_COMPANY_NAME`, `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`. For an existing company, use `BOOTSTRAP_COMPANY_ID` instead of the name. Remove the bootstrap variables after the account is created.
 
-Login with `POST /api/auth/login` using `companyId`, `username` and `password`. Send the returned token as `Authorization: Bearer <accessToken>`. Administrators can create users with `POST /api/users` and deactivate them with `POST /api/users/{userId}/deactivate`; authenticated users can change their own password with `POST /api/users/change-password`.
+Login with `POST /api/auth/login` using `companyId`, `username` and `password`. Send the returned token as `Authorization: Bearer <accessToken>`. `GET /api/auth/me` returns the signed-in user. Administrators can list users with `GET /api/users`, create users with `POST /api/users`, reset a lost password with `POST /api/users/{userId}/reset-password` and deactivate accounts with `POST /api/users/{userId}/deactivate`; authenticated users can change their own password with `POST /api/users/change-password`. A reset accepts `{ "newPassword": "..." }`, clears a login lock and invalidates all existing tokens for that account.
+
+Si aparece `Invalid credentials`, comprueba el ID de empresa, el nombre de usuario y la contraseña exacta con la que se creó la cuenta. Tras cinco intentos fallidos, espera 15 minutos o pide a un administrador que use **Equipo y cuenta → Restablecer clave**. El administrador no puede ver la contraseña anterior. Tras crear o restablecer un usuario, el panel muestra la nueva contraseña temporal una vez; guárdala antes de cerrar la tarjeta. El archivo `.local/credentials.txt` solo corresponde al administrador inicial, no a los usuarios creados después.
 
 | Role | Allowed changes |
 |---|---|
@@ -84,7 +92,7 @@ Login with `POST /api/auth/login` using `companyId`, `username` and `password`. 
 
 ## Automated tests
 
-Run `./mvnw test` (or `mvn test` on Windows). Tests use an in-memory H2 database in MySQL mode and apply the real Flyway migrations. They create and roll back their own data; no sample records or external MySQL server are needed. Unit tests use mocked repositories to check business rules without starting a database. Security integration tests issue real JWTs and check login, role permissions, company isolation, password changes, account deactivation and lockout.
+Run `./mvnw test` (or `.\mvnw.cmd test` on Windows). Tests use an in-memory H2 database in MySQL mode and apply the real Flyway migrations. They create and roll back their own data; no sample records or external MySQL server are needed. Unit tests use mocked repositories to check business rules without starting a database. Security integration tests issue real JWTs and check login, role permissions, company isolation, password resets, account deactivation, lockout and tenant-scoped audit events.
 
 ## Domain Overview
 
@@ -103,6 +111,7 @@ Main domain entities:
 - `Shipment`
 - `ShipmentItem`
 - `InventoryMovement`
+- `AuditEvent`
 
 The database contains constraints and relationships to protect important business invariants such as:
 
@@ -132,39 +141,39 @@ src/main/resources/db/migration
 
 ## Configuration
 
-Database credentials are provided through environment variables.
+El perfil por defecto es `local`: Spring Boot detecta `compose.yaml`, ejecuta Docker Compose, espera a que MySQL esté disponible y configura la conexión automáticamente. El contenedor publica MySQL solo en `127.0.0.1:3307`; los datos persisten en el volumen `mysql-data`. El backend también escucha solo en `127.0.0.1` en este perfil. Docker Desktop debe estar instalado y **en ejecución**; Spring inicia el contenedor, pero no puede iniciar el motor de Docker por sí mismo.
 
-Example `.env`:
+En `local`, al iniciar una empresa sin productos, almacenes ni pedidos, se cargan datos de demostración: tres productos, dos almacenes, existencias, movimientos y cuatro pedidos en estados borrador, confirmado, enviado y parcialmente enviado. La carga se omite en reinicios y en empresas con datos operativos existentes. Para desactivarla establece `APP_DEMO_SEED_ENABLED=false` antes de arrancar. El perfil `prod` nunca carga estos datos.
 
-```env
-DB_URL=jdbc:mysql://localhost:3307/myenterpriseos
-DB_USERNAME=root
-DB_PASSWORD=your_password
-```
-
-The real `.env` file is excluded from Git and should never be committed.
-
-Spring uses the environment variables through `application.properties`:
-
-```properties
-spring.datasource.url=${DB_URL}
-spring.datasource.username=${DB_USERNAME}
-spring.datasource.password=${DB_PASSWORD}
-
-spring.jpa.hibernate.ddl-auto=validate
-spring.flyway.enabled=true
-spring.jpa.show-sql=true
-```
+El perfil `prod` desactiva Docker Compose y requiere `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_PRIVATE_KEY_LOCATION`, `JWT_PUBLIC_KEY_LOCATION` y `JWT_ISSUER`. Actívalo con `SPRING_PROFILES_ACTIVE=prod`. Mantén los secretos fuera del repositorio.
 
 ## Running the Project
 
-Make sure MySQL is running and the required environment variables are configured.
+Requisitos: Java 21, Docker Desktop iniciado, Node 22+ y pnpm 11. No necesitas ejecutar `docker compose up`.
 
-Then run:
+En una terminal, desde la raíz del repositorio:
 
-```bash
-./mvnw spring-boot:run
+```powershell
+.\mvnw.cmd spring-boot:run
 ```
+
+En otra terminal:
+
+```powershell
+cd frontend
+pnpm install
+pnpm start
+```
+
+Si PowerShell no encuentra `pnpm`, ejecuta `corepack pnpm install` y `corepack pnpm start` desde `frontend`. Node.js debe estar instalado y Corepack disponible en el PATH.
+
+Abre `http://127.0.0.1:4200`. Angular envía `/api` al backend en `http://127.0.0.1:8080` mediante su proxy de desarrollo. Lee `companyId`, `username` y `password` de `.local/credentials.txt` después del primer arranque. El JWT se guarda en `sessionStorage` y caduca a los 15 minutos; vuelve a iniciar sesión cuando caduque. `pnpm build` genera la versión optimizada del frontend en `frontend/dist/`.
+
+El panel permite crear y consultar productos y almacenes; recibir y ajustar stock y ver movimientos; crear, confirmar, cancelar y enviar pedidos (incluidos envíos parciales); listar, crear, restablecer y desactivar usuarios; cambiar la contraseña y consultar la auditoría. Los botones respetan los roles. Para confirmar un pedido, selecciona un inventario disponible para cada línea. El panel actualiza solo los datos afectados por una operación y carga los recursos iniciales en paralelo.
+
+El backend registra cada petición `/api/` en `logs/backend.log` (configurable con `APP_LOG_FILE`), con método, ruta, código HTTP, duración e identificador `X-Request-Id`. Los eventos de escritura se guardan en `audit_event`; la pantalla **Auditoría** y `GET /api/audit-events` solo muestran eventos de la propia empresa a administradores. El fichero rota a 10 MB y conserva hasta 14 archivos y 100 MB. Ni contraseñas ni JWT se escriben en estos registros. Los intentos fallidos de login quedan en el log HTTP; no generan filas de auditoría para evitar que tráfico anónimo llene la tabla.
+
+Las pruebas del backend se ejecutan con `.\mvnw.cmd test` sin Docker; utilizan H2 y sus propios datos. Las del frontend se ejecutan con `pnpm test --watch=false`.
 
 Flyway automatically applies pending database migrations when the application starts.
 
@@ -482,19 +491,18 @@ Planned development includes:
 - Stock transfers between warehouses
 - Concurrent request testing
 - Testcontainers
-- Docker Compose environment
 - Advanced SQL queries
-- Database indexes
+- Índices adicionales en las rutas de lectura frecuentes
 - `EXPLAIN ANALYZE`
-- N+1 query optimization
+- Más análisis de consultas con grandes conjuntos de datos
 - Redis caching
 - Asynchronous messaging
 - RabbitMQ or Kafka
 - Idempotent event processing
 - Database/broker consistency
-- Observability
+- Métricas y alertas
 - Metrics
-- Structured logging
+- Exportación centralizada de logs
 
 ## Main Goal
 

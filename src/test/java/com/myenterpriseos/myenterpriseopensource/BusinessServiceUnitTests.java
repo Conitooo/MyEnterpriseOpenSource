@@ -65,11 +65,9 @@ class BusinessServiceUnitTests {
         Inventory stock = new Inventory();
         stock.setId(1L);
         stock.setQuantity(5);
-        StockReservation reservation = new StockReservation();
-        reservation.setQuantity(4);
         when(inventories.lockById(1L)).thenReturn(Optional.of(stock));
-        when(reservations.findByInventoryIdAndStatus(1L, ReservationStatus.ACTIVE))
-                .thenReturn(List.of(reservation));
+        when(reservations.sumQuantityByInventoryIdAndStatus(1L, ReservationStatus.ACTIVE))
+                .thenReturn(4L);
         assertThrows(ApiException.class, () -> service.adjust(1L, new AdjustmentRequest(-2, "damage")));
         assertEquals(5, stock.getQuantity());
         verify(movements, never()).save(any());

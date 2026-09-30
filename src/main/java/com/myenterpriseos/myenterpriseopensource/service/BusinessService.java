@@ -130,7 +130,14 @@ public class BusinessService {
 
     public List<InventoryResponse> inventory(Long warehouseId) {
         warehouse(warehouseId);
-        return inventories.findByWarehouseId(warehouseId).stream().map(this::inventoryResponse).toList();
+        List<Inventory> stocks = inventories.findByWarehouseId(warehouseId);
+        if (stocks.isEmpty()) return List.of();
+        Map<Long, Long> reserved = new HashMap<>();
+        for (Object[] row : reservations.totalsByInventoryIds(
+                stocks.stream().map(Inventory::getId).toList(), ReservationStatus.ACTIVE)) {
+            reserved.put(((Number) row[0]).longValue(), ((Number) row[1]).longValue());
+        }
+        return stocks.stream().map(stock -> inventoryResponse(stock, reserved.getOrDefault(stock.getId(), 0L))).toList();
     }
 
     public InventoryResponse adjust(Long inventoryId, AdjustmentRequest body) {
@@ -163,12 +170,14 @@ public class BusinessService {
     }
 
     private long activeReserved(Long inventoryId) {
-        return reservations.findByInventoryIdAndStatus(inventoryId, ReservationStatus.ACTIVE)
-                .stream().mapToLong(StockReservation::getQuantity).sum();
+        return reservations.sumQuantityByInventoryIdAndStatus(inventoryId, ReservationStatus.ACTIVE);
     }
 
     private InventoryResponse inventoryResponse(Inventory stock) {
-        long reserved = activeReserved(stock.getId());
+        return inventoryResponse(stock, activeReserved(stock.getId()));
+    }
+
+    private InventoryResponse inventoryResponse(Inventory stock, long reserved) {
         return new InventoryResponse(stock.getId(), stock.getProduct().getId(), stock.getWarehouse().getId(),
                 stock.getQuantity(), (int) (stock.getQuantity() - reserved));
     }
@@ -179,13 +188,19 @@ public class BusinessService {
         for (OrderLineRequest line : body.items()) {
             if (!seen.add(line.productId())) throw bad("Duplicate product in order");
         }
+        Map<Long, Product> orderProducts = products.findAllById(seen).stream()
+                .collect(Collectors.toMap(Product::getId, p -> p));
+        for (Long productId : seen) {
+            Product item = orderProducts.get(productId);
+            if (item == null) throw missing("Product");
+            if (!same(item.getCompany().getId(), companyId)) throw bad("Product belongs to another company");
+        }
         SalesOrder order = new SalesOrder();
         order.setCompany(owner);
         order.setStatus(OrderStatus.DRAFT);
         orders.save(order);
         for (OrderLineRequest line : body.items()) {
-            Product product = product(line.productId());
-            if (!same(product.getCompany().getId(), companyId)) throw bad("Product belongs to another company");
+            Product product = orderProducts.get(line.productId());
             OrderItem item = new OrderItem();
             item.setOrder(order);
             item.setProduct(product);
@@ -199,11 +214,33 @@ public class BusinessService {
 
     public OrderResponse order(Long orderId) { return orderResponse(orderEntity(orderId)); }
 
+    public List<OrderResponse> orders(Long companyId) {
+        company(companyId);
+        List<SalesOrder> companyOrders = orders.findByCompanyId(companyId);
+        if (companyOrders.isEmpty()) return List.of();
+        Map<Long, List<OrderLineResponse>> lines = orderItems.findByCompanyId(companyId).stream()
+                .collect(Collectors.groupingBy(i -> i.getOrder().getId(), Collectors.mapping(this::orderLineResponse,
+                        Collectors.toList())));
+        return companyOrders.stream().map(order -> new OrderResponse(order.getId(), companyId,
+                order.getStatus().name(), lines.getOrDefault(order.getId(), List.of()))).toList();
+    }
+
+    public List<ShipmentResponse> shipments(Long orderId) {
+        orderEntity(orderId);
+        return shipments.findByOrderId(orderId).stream()
+                .map(s -> new ShipmentResponse(s.getId(), orderId, s.getWarehouse().getId(),
+                        s.getStatus().name())).toList();
+    }
+
     private OrderResponse orderResponse(SalesOrder order) {
         List<OrderLineResponse> lines = orderItems.findByOrderId(order.getId()).stream()
-                .map(i -> new OrderLineResponse(i.getId(), i.getProduct().getId(), i.getQuantity(),
-                        i.getPrice(), i.getCurrency())).toList();
+                .map(this::orderLineResponse).toList();
         return new OrderResponse(order.getId(), order.getCompany().getId(), order.getStatus().name(), lines);
+    }
+
+    private OrderLineResponse orderLineResponse(OrderItem item) {
+        return new OrderLineResponse(item.getId(), item.getProduct().getId(), item.getQuantity(),
+                item.getPrice(), item.getCurrency());
     }
 
     public OrderResponse confirm(Long orderId, ConfirmRequest body) {
@@ -253,13 +290,11 @@ public class BusinessService {
         SalesOrder order = lockedOrder(orderId);
         if (order.getStatus() != OrderStatus.DRAFT && order.getStatus() != OrderStatus.CONFIRMED)
             throw conflict("Order cannot be cancelled");
-        if (!shipments.findByOrderId(orderId).isEmpty()) throw conflict("An order with shipments cannot be cancelled");
-        for (OrderItem line : orderItems.findByOrderId(orderId)) {
-            for (StockReservation reservation : reservations.findByOrderItemId(line.getId())) {
-                if (reservation.getStatus() == ReservationStatus.ACTIVE) {
-                    reservation.setStatus(ReservationStatus.RELEASED);
-                    reservation.setReleasedAt(Instant.now());
-                }
+        if (shipments.existsByOrderId(orderId)) throw conflict("An order with shipments cannot be cancelled");
+        for (StockReservation reservation : reservations.findByOrderId(orderId)) {
+            if (reservation.getStatus() == ReservationStatus.ACTIVE) {
+                reservation.setStatus(ReservationStatus.RELEASED);
+                reservation.setReleasedAt(Instant.now());
             }
         }
         order.setStatus(OrderStatus.CANCELLED);
@@ -274,18 +309,23 @@ public class BusinessService {
         if (!same(location.getCompany().getId(), order.getCompany().getId())) throw bad("Warehouse belongs to another company");
         Map<Long, OrderItem> lines = orderItems.findByOrderId(orderId).stream()
                 .collect(Collectors.toMap(OrderItem::getId, i -> i));
+        Map<Long, Long> shippedTotals = new HashMap<>();
+        for (Object[] row : shipmentItems.shippedTotalsByOrderId(orderId)) {
+            shippedTotals.put(((Number) row[0]).longValue(), ((Number) row[1]).longValue());
+        }
         Map<Long, Integer> requested = new HashMap<>();
         for (ShipmentLineRequest line : body.items()) {
             if (!lines.containsKey(line.orderItemId())) throw bad("Order item does not belong to order");
             if (requested.putIfAbsent(line.orderItemId(), line.quantity()) != null) throw bad("Duplicate shipment item");
         }
+        Map<Long, List<StockReservation>> reservationsByLine = reservations.findByOrderId(orderId).stream()
+                .collect(Collectors.groupingBy(r -> r.getOrderItem().getId()));
         Map<Long, StockReservation> selected = new HashMap<>();
         for (var entry : requested.entrySet()) {
             OrderItem line = lines.get(entry.getKey());
-            long alreadyShipped = shipmentItems.findByOrderItemId(line.getId()).stream()
-                    .mapToLong(ShipmentItem::getQuantity).sum();
+            long alreadyShipped = shippedTotals.getOrDefault(line.getId(), 0L);
             if (alreadyShipped + entry.getValue() > line.getQuantity()) throw conflict("Shipment exceeds order quantity");
-            StockReservation reservation = reservations.findByOrderItemId(line.getId()).stream()
+            StockReservation reservation = reservationsByLine.getOrDefault(line.getId(), List.of()).stream()
                     .filter(r -> r.getStatus() == ReservationStatus.ACTIVE &&
                             same(r.getInventory().getWarehouse().getId(), location.getId()))
                     .findFirst().orElseThrow(() -> conflict("No active reservation in warehouse"));
@@ -318,11 +358,11 @@ public class BusinessService {
             shipped.setOrderItem(lines.get(entry.getKey()));
             shipped.setQuantity(quantity);
             shipmentItems.save(shipped);
+            shippedTotals.merge(entry.getKey(), (long) quantity, Long::sum);
             recordMovement(stock, MovementType.SHIPMENT, -quantity, "Shipment " + shipment.getId());
         }
         boolean complete = lines.values().stream().allMatch(line ->
-                shipmentItems.findByOrderItemId(line.getId()).stream().mapToLong(ShipmentItem::getQuantity).sum()
-                        == line.getQuantity());
+                shippedTotals.getOrDefault(line.getId(), 0L) == line.getQuantity().longValue());
         if (complete) order.setStatus(OrderStatus.SHIPPED);
         return new ShipmentResponse(shipment.getId(), orderId, location.getId(), shipment.getStatus().name());
     }

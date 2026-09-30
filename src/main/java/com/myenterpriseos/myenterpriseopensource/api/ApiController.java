@@ -58,6 +58,12 @@ public class ApiController {
     @GetMapping("/orders/{orderId}")
     @PreAuthorize("@tenantGuard.order(#p0)")
     public OrderResponse order(@PathVariable Long orderId) { return service.order(orderId); }
+    @GetMapping("/companies/{companyId}/orders")
+    @PreAuthorize("@tenantGuard.company(#p0)")
+    public List<OrderResponse> orders(@PathVariable Long companyId) { return service.orders(companyId); }
+    @GetMapping("/orders/{orderId}/shipments")
+    @PreAuthorize("@tenantGuard.order(#p0)")
+    public List<ShipmentResponse> shipments(@PathVariable Long orderId) { return service.shipments(orderId); }
     @PostMapping("/orders/{orderId}/confirm")
     @PreAuthorize("hasAnyRole('ADMIN','SALES') and @tenantGuard.order(#p0)")
     public OrderResponse confirm(@PathVariable Long orderId, @Valid @RequestBody ConfirmRequest body) {

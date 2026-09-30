@@ -47,7 +47,7 @@ public class AuthService {
     @Transactional(noRollbackFor = BadCredentialsException.class)
     public TokenResponse login(LoginRequest body) {
         if (body.password().getBytes(StandardCharsets.UTF_8).length > 72) throw invalid();
-        AppUser user = users.lockByCompanyIdAndUsername(body.companyId(), body.username())
+        AppUser user = users.lockByCompanyIdAndUsername(body.companyId(), body.username().trim())
                 .orElse(null);
         if (user == null) {
             passwords.matches(body.password(), dummyHash);
@@ -131,8 +131,39 @@ public class AuthService {
         return response(user);
     }
 
+    @Transactional
+    public UserResponse resetPassword(Long userId, ResetPasswordRequest body) {
+        Long companyId = tenant.currentCompanyId();
+        if (userId.equals(tenant.currentUserId()))
+            throw new ApiException(HttpStatus.CONFLICT, "Use change-password for your own account");
+        AppUser user = users.lockById(userId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "User not found"));
+        if (!user.getCompany().getId().equals(companyId))
+            throw new ApiException(HttpStatus.NOT_FOUND, "User not found");
+        PasswordRules.validate(body.newPassword());
+        user.setPasswordHash(passwords.encode(body.newPassword()));
+        user.setTokenVersion(user.getTokenVersion() + 1);
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
+        return response(user);
+    }
+
     private UserResponse response(AppUser user) {
         return new UserResponse(user.getId(), user.getCompany().getId(), user.getUsername(),
                 user.getRole(), user.isActive());
+    }
+
+    @Transactional(readOnly = true)
+    public UserResponse me() {
+        Long userId = tenant.currentUserId();
+        if (userId == null) throw new ApiException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        return response(users.findWithCompanyById(userId).orElseThrow(this::invalid));
+    }
+
+    @Transactional(readOnly = true)
+    public List<UserResponse> users() {
+        Long companyId = tenant.currentCompanyId();
+        if (companyId == null) throw new ApiException(HttpStatus.FORBIDDEN, "Access denied");
+        return users.findByCompanyIdOrderByIdAsc(companyId).stream().map(this::response).toList();
     }
 }

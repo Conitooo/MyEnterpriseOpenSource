@@ -16,4 +16,5 @@ public final class AuthDtos {
     public record UserResponse(Long id, Long companyId, String username, UserRole role, boolean active) {}
     public record ChangePasswordRequest(@NotBlank String currentPassword,
                                         @NotBlank String newPassword) {}
+    public record ResetPasswordRequest(@NotBlank String newPassword) {}
 }

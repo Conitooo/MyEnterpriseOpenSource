@@ -176,4 +176,81 @@ class SecurityIntegrationTests {
         mvc.perform(post("/api/users").header("Authorization", token(first, "admin"))
                 .contentType("application/json").content(body)).andExpect(status().isCreated());
     }
+
+    @Test
+    void newlyCreatedUserCanLogInAndReadOwnProfile() throws Exception {
+        String username = " new-viewer ";
+        mvc.perform(post("/api/users").header("Authorization", token(first, "admin"))
+                        .contentType("application/json")
+                        .content("{\"username\":\"" + username + "\",\"password\":\"" + PASSWORD + "\",\"role\":\"VIEWER\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.username").value("new-viewer"));
+        String accessToken = mvc.perform(post("/api/auth/login").contentType("application/json")
+                        .content("{\"companyId\":" + first + ",\"username\":\" new-viewer \",\"password\":\"" + PASSWORD + "\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String bearer = "Bearer " + accessToken.replaceAll(".*\\\"accessToken\\\":\\\"([^\\\"]+)\\\".*", "$1");
+        mvc.perform(get("/api/auth/me").header("Authorization", bearer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("new-viewer"))
+                .andExpect(jsonPath("$.companyId").value(first));
+    }
+
+    @Test
+    void adminCanResetLostPasswordAndRevokeOldToken() throws Exception {
+        String oldToken = token(first, "viewer");
+        String body = "{\"newPassword\":\"ReplacementPassword2026!\"}";
+        mvc.perform(post("/api/users/{id}/reset-password", viewerId)
+                        .header("Authorization", token(first, "sales"))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/users/{id}/reset-password", viewerId)
+                        .header("Authorization", token(second, "other"))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/users/{id}/reset-password", viewerId)
+                        .header("Authorization", token(first, "admin"))
+                        .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("viewer"));
+        mvc.perform(get("/api/auth/me").header("Authorization", oldToken))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/login").contentType("application/json")
+                        .content("{\"companyId\":" + first + ",\"username\":\"viewer\",\"password\":\"" + PASSWORD + "\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/login").contentType("application/json")
+                        .content("{\"companyId\":" + first + ",\"username\":\"viewer\",\"password\":\"ReplacementPassword2026!\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void auditEventsAreTenantScopedAndAdminOnly() throws Exception {
+        String admin = token(first, "admin");
+        mvc.perform(post("/api/companies/{id}/products", first)
+                        .header("Authorization", admin)
+                        .contentType("application/json")
+                        .content("{\"productName\":\"Audited\",\"sku\":\"AUDIT-1\",\"price\":1,\"currency\":\"EUR\"}"))
+                .andExpect(status().isCreated()).andExpect(header().exists("X-Request-Id"));
+        mvc.perform(get("/api/audit-events").header("Authorization", admin))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.events[0].username").value("admin"))
+                .andExpect(jsonPath("$.events[0].route").value("/api/companies/{companyId}/products"));
+        mvc.perform(get("/api/audit-events").header("Authorization", token(first, "viewer")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/audit-events").header("Authorization", token(second, "other")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.events").isEmpty());
+    }
+
+    @Test
+    void frontendReadEndpointsRespectAuthenticationAndTenant() throws Exception {
+        String admin = token(first, "admin");
+        String viewer = token(first, "viewer");
+        mvc.perform(get("/api/auth/me").header("Authorization", viewer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.companyId").value(first));
+        mvc.perform(get("/api/users").header("Authorization", admin))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].username").value("admin"));
+        mvc.perform(get("/api/users").header("Authorization", viewer))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/companies/{id}/orders", first).header("Authorization", viewer))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isArray());
+        mvc.perform(get("/api/companies/{id}/orders", second).header("Authorization", viewer))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/orders/{id}/shipments", 99999).header("Authorization", viewer))
+                .andExpect(status().isForbidden());
+    }
 }

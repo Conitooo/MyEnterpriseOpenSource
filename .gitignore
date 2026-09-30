@@ -32,6 +32,11 @@ build/
 ### VS Code ###
 .vscode/
 .env
+.local/
+logs/
+frontend/node_modules/
+frontend/.angular/
+frontend/dist/
 *.pem
 !src/test/resources/jwt-test-private.pem
 !src/test/resources/jwt-test-public.pem
