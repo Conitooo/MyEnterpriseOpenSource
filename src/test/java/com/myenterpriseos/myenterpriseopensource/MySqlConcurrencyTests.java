@@ -60,6 +60,9 @@ class MySqlConcurrencyTests {
             int successes = (a.get(20, TimeUnit.SECONDS) ? 1 : 0) + (b.get(20, TimeUnit.SECONDS) ? 1 : 0);
             assertEquals(1, successes);
             assertEquals(1, service.inventory(warehouse).getFirst().available());
+            assertEquals(2, service.orderPage(company, 0, 20, "ALL", "").total());
+            assertEquals(1, service.orderPage(company, 0, 20, "CONFIRMED", "Buyer").total());
+            assertEquals(0, service.orderPage(company, 0, 20, "CONFIRMED", "Nobody").total());
         }
     }
 

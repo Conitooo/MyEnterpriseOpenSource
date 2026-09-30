@@ -110,7 +110,7 @@ describe('actualización de la pantalla de acceso', () => {
     http.expectOne('/api/companies/1/products/search?page=0&size=20&q=').flush({ items: [], total: 0, page: 0, size: 20 });
     http.expectOne('/api/companies/1/customers?page=0&size=20&q=').flush({ items: [], total: 0, page: 0, size: 20 });
     http.expectOne('/api/companies/1/warehouses').flush([]);
-    http.expectOne('/api/companies/1/orders/search?page=0&size=20').flush({ items: [], total: 0, page: 0, size: 20 });
+    http.expectOne('/api/companies/1/orders/search?page=0&size=20&status=ALL&customer=').flush({ items: [], total: 0, page: 0, size: 20 });
     await login;
     await fixture.whenStable();
 
@@ -171,6 +171,17 @@ describe('nuevos flujos operativos', () => {
     app.shipments = [{ id: 2, orderId: 9, warehouseId: 1, status: 'SHIPPED', carrier: null,
       trackingNumber: null, items: [{ id: 20, orderItemId: 11, quantity: 2, returnedQuantity: 0 }] }];
     expect(app.remainingByLine[11]).toBe(3);
+  });
+
+  it('filtra pedidos por estado y nombre del cliente', async () => {
+    app.orderStatusFilter = 'SHIPPED';
+    app.orderCustomerSearch = 'Buyer One';
+    const action = app.loadOrderPage();
+    const request = http.expectOne('/api/companies/7/orders/search?page=0&size=20&status=SHIPPED&customer=Buyer%20One');
+    request.flush({ items: [], total: 0, page: 0, size: 20 });
+    await action;
+    expect(app.orders).toHaveLength(0);
+    http.verify();
   });
 
   it('registra una empresa y limpia el código del formulario', async () => {

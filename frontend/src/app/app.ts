@@ -51,6 +51,8 @@ export class App implements OnInit {
   orderPage: Page<Order> = { items: [], total: 0, page: 0, size: 20 };
   customerSearch = '';
   productSearch = '';
+  orderStatusFilter = 'ALL';
+  orderCustomerSearch = '';
   customerForm = { name: '', email: '', phone: '' };
   editingCustomerId = 0;
   editingProductId = 0;
@@ -155,6 +157,10 @@ export class App implements OnInit {
   private async post<T>(url: string, body: unknown = {}): Promise<T> { return firstValueFrom(this.http.post<T>(url, body)); }
   private async put<T>(url: string, body: unknown): Promise<T> { return firstValueFrom(this.http.put<T>(url, body)); }
   private get companyUrl(): string { return `/api/companies/${this.me!.companyId}`; }
+  private orderPageUrl(page: number): string {
+    return `${this.companyUrl}/orders/search?page=${page}&size=20&status=${this.orderStatusFilter}` +
+      `&customer=${encodeURIComponent(this.orderCustomerSearch)}`;
+  }
   private upsertStock(stock: Stock): void {
     this.allStocks = [...this.allStocks.filter(s => s.id !== stock.id), stock];
     this.stocks = this.allStocks.filter(s => s.warehouseId === this.selectedWarehouseId);
@@ -221,7 +227,7 @@ export class App implements OnInit {
         this.get<Page<Product>>(`${this.companyUrl}/products/search?page=${this.productPage.page}&size=20&q=${encodeURIComponent(this.productSearch)}`),
         this.get<Page<Customer>>(`${this.companyUrl}/customers?page=${this.customerPage.page}&size=20&q=${encodeURIComponent(this.customerSearch)}`),
         this.get<Warehouse[]>(`${this.companyUrl}/warehouses`),
-        this.get<Page<Order>>(`${this.companyUrl}/orders/search?page=${this.orderPage.page}&size=20`),
+        this.get<Page<Order>>(this.orderPageUrl(this.orderPage.page)),
         this.canCatalog ? this.get<User[]>('/api/users') : Promise.resolve([]),
       ]);
       this.productPage = products; this.customerPage = customers; this.orderPage = orders;
@@ -258,7 +264,7 @@ export class App implements OnInit {
   async loadOrderPage(page = 0): Promise<void> {
     this.orderPage.page = page;
     try {
-      this.orderPage = await this.get<Page<Order>>(`${this.companyUrl}/orders/search?page=${page}&size=20`);
+      this.orderPage = await this.get<Page<Order>>(this.orderPageUrl(page));
       this.orders = this.orderPage.items;
     } finally { this.changeDetector.markForCheck(); }
   }

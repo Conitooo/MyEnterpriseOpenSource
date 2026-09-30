@@ -65,7 +65,7 @@ Las entidades y repositorios están bajo `com.myenterpriseos.myenterpriseopensou
 | POST | `/api/companies/{companyId}/transfers` | Transfer available stock between warehouses |
 | GET | `/api/inventory/{inventoryId}/movements` | View stock history |
 | POST / GET | `/api/companies/{companyId}/orders` | Create or list orders |
-| GET | `/api/companies/{companyId}/orders/search?page=0&size=20` | List orders with pagination |
+| GET | `/api/companies/{companyId}/orders/search?page=0&size=20&status=ALL&customer=` | Filter orders by status/customer name with pagination |
 | GET | `/api/orders/{orderId}` | View an order |
 | GET | `/api/orders/{orderId}/shipments` | List its shipments |
 | POST | `/api/orders/{orderId}/confirm` | Allocate and reserve all order lines |
@@ -171,6 +171,8 @@ El perfil `prod` desactiva Docker Compose y requiere `DB_URL`, `DB_USERNAME`, `D
 Para un despliegue con HTTPS, copia `env.prod.example` a `.env.prod`, configura un dominio que apunte al servidor, contraseñas únicas y rutas absolutas a claves RSA privadas/públicas. Después ejecuta `docker compose --env-file .env.prod -f compose.prod.yaml up --build -d`. Caddy publica 80/443 y obtiene el certificado TLS; MySQL y el backend quedan en la red interna de Compose. Abre únicamente el dominio HTTPS. El registro público queda cerrado si `APP_REGISTRATION_CODE` está vacío. Protege `.env.prod` y la clave privada fuera del repositorio.
 
 Antes de actualizar o migrar, ejecuta `.\scripts\backup-and-verify.ps1` para el stack local o `.\scripts\backup-and-verify.ps1 -Mode prod` para producción. El script guarda un volcado en `backups/` (fuera de Git), lo restaura en una base temporal y verifica tablas clave. Conserva copias fuera de la máquina y programa esta tarea con el planificador del servidor; prueba también una restauración en un entorno separado antes de depender de las copias. Para monitorización, comprueba `/actuator/health` y configura alertas externas sobre disponibilidad, errores y latencia; `/actuator/metrics` requiere un JWT de administrador.
+
+Para alertas de disponibilidad, programa `.\scripts\check-health.ps1 -HealthUrl https://tu-dominio/actuator/health` cada minuto desde otra máquina. Configura `APP_ALERT_WEBHOOK_URL` como variable de entorno del proceso programado con un webhook HTTPS compatible con JSON `{ "text": "..." }`. El script avisa al pasar de sano a caído y al recuperarse; guarda el último estado en `.local/health-alert.state` y devuelve un código de error si el servicio sigue caído. El destino concreto del webhook depende del sistema de notificaciones que uses.
 
 ## Running the Project
 

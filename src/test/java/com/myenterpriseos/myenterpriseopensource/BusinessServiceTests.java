@@ -149,5 +149,6 @@ class BusinessServiceTests {
         assertEquals(2, page.items().size());
         assertTrue(page.items().stream().allMatch(p -> p.companyId().equals(first)));
         assertThrows(ApiException.class, () -> service.productPage(first, "", 0, 101));
+        assertThrows(ApiException.class, () -> service.orderPage(first, 0, 20, "BAD", ""));
     }
 }

@@ -117,8 +117,10 @@ public class ApiController {
     @GetMapping("/companies/{companyId}/orders/search")
     @PreAuthorize("@tenantGuard.company(#p0)")
     public PageResponse<OrderResponse> orderPage(@PathVariable Long companyId,
-            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
-        return service.orderPage(companyId, page, size);
+            @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "ALL") String status,
+            @RequestParam(defaultValue = "") String customer) {
+        return service.orderPage(companyId, page, size, status, customer);
     }
     @GetMapping("/orders/{orderId}/shipments")
     @PreAuthorize("@tenantGuard.order(#p0)")

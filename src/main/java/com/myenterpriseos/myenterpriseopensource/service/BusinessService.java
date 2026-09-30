@@ -413,9 +413,17 @@ public class BusinessService {
                 lines.getOrDefault(order.getId(), List.of()))).toList();
     }
 
-    public PageResponse<OrderResponse> orderPage(Long companyId, int page, int size) {
+    public PageResponse<OrderResponse> orderPage(Long companyId, int page, int size,
+                                                 String status, String customerQuery) {
         company(companyId);
-        Page<SalesOrder> result = orders.findByCompanyId(companyId, pageRequest(page, size));
+        OrderStatus filter = null;
+        if (status != null && !status.isBlank() && !status.equalsIgnoreCase("ALL")) {
+            try { filter = OrderStatus.valueOf(status.toUpperCase(Locale.ROOT)); }
+            catch (IllegalArgumentException ex) { throw bad("Invalid order status"); }
+        }
+        String query = customerQuery == null ? "" : customerQuery.trim();
+        if (query.length() > 100) throw bad("Customer search is too long");
+        Page<SalesOrder> result = orders.search(companyId, filter, query, pageRequest(page, size));
         List<Long> ids = result.getContent().stream().map(SalesOrder::getId).toList();
         Map<Long, List<OrderLineResponse>> lines = ids.isEmpty() ? Map.of() :
                 orderItems.findByOrderIdIn(ids).stream().collect(Collectors.groupingBy(i -> i.getOrder().getId(),
