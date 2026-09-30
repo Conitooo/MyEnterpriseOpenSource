@@ -141,7 +141,7 @@ src/main/resources/db/migration
 
 ## Configuration
 
-El perfil por defecto es `local`: Spring Boot detecta `compose.yaml`, ejecuta Docker Compose, espera a que MySQL esté disponible y configura la conexión automáticamente. El contenedor publica MySQL solo en `127.0.0.1:3307`; los datos persisten en el volumen `mysql-data`. El backend también escucha solo en `127.0.0.1` en este perfil. Docker Desktop debe estar instalado y **en ejecución**; Spring inicia el contenedor, pero no puede iniciar el motor de Docker por sí mismo.
+El perfil por defecto es `local`: si ejecutas Spring Boot con Maven, usa `compose.local.yaml` para levantar únicamente MySQL y configurar la conexión automáticamente. `compose.yaml` levanta la aplicación completa: MySQL, backend y frontend. Los puertos se publican solo en `127.0.0.1`: MySQL en `3307`, API en `8080` y panel en `4200`. Los datos MySQL persisten en el volumen `mysql-data`. Docker Desktop debe estar instalado y **en ejecución**.
 
 En `local`, al iniciar una empresa sin productos, almacenes ni pedidos, se cargan datos de demostración: tres productos, dos almacenes, existencias, movimientos y cuatro pedidos en estados borrador, confirmado, enviado y parcialmente enviado. La carga se omite en reinicios y en empresas con datos operativos existentes. Para desactivarla establece `APP_DEMO_SEED_ENABLED=false` antes de arrancar. El perfil `prod` nunca carga estos datos.
 
@@ -149,7 +149,15 @@ El perfil `prod` desactiva Docker Compose y requiere `DB_URL`, `DB_USERNAME`, `D
 
 ## Running the Project
 
-Requisitos: Java 21, Docker Desktop iniciado, Node 22+ y pnpm 11. No necesitas ejecutar `docker compose up`.
+Para levantar todo con Docker, desde la raíz del repositorio:
+
+```powershell
+docker compose up --build -d
+```
+
+Abre `http://127.0.0.1:4200`. Nginx sirve Angular y envía `/api` al backend dentro de la red de Compose. La primera ejecución puede tardar mientras descarga imágenes y dependencias. La contraseña inicial del administrador queda en `.local/credentials.txt`; la carpeta `.local` del host se monta en el backend. Para ver los logs ejecuta `docker compose logs -f backend` y para detener los servicios `docker compose down` (conserva el volumen MySQL). Evita ejecutar a la vez el backend local o `pnpm start`, porque usarían los mismos puertos.
+
+También puedes ejecutar backend y frontend fuera de Docker. Requisitos: Java 21, Docker Desktop iniciado, Node 22+ y pnpm 11. No necesitas ejecutar `docker compose up` para esta modalidad.
 
 En una terminal, desde la raíz del repositorio:
 
@@ -167,7 +175,7 @@ pnpm start
 
 Si PowerShell no encuentra `pnpm`, ejecuta `corepack pnpm install` y `corepack pnpm start` desde `frontend`. Node.js debe estar instalado y Corepack disponible en el PATH.
 
-Abre `http://127.0.0.1:4200`. Angular envía `/api` al backend en `http://127.0.0.1:8080` mediante su proxy de desarrollo. Lee `companyId`, `username` y `password` de `.local/credentials.txt` después del primer arranque. El JWT se guarda en `sessionStorage` y caduca a los 15 minutos; vuelve a iniciar sesión cuando caduque. `pnpm build` genera la versión optimizada del frontend en `frontend/dist/`.
+Abre `http://127.0.0.1:4200`. En desarrollo, Angular envía `/api` al backend en `http://127.0.0.1:8080` mediante su proxy. Lee `companyId`, `username` y `password` de `.local/credentials.txt` después del primer arranque. El JWT se guarda en `sessionStorage` y caduca a los 15 minutos; vuelve a iniciar sesión cuando caduque. `pnpm build` genera la versión optimizada del frontend en `frontend/dist/`.
 
 El panel permite crear y consultar productos y almacenes; recibir y ajustar stock y ver movimientos; crear, confirmar, cancelar y enviar pedidos (incluidos envíos parciales); listar, crear, restablecer y desactivar usuarios; cambiar la contraseña y consultar la auditoría. Los botones respetan los roles. Para confirmar un pedido, selecciona un inventario disponible para cada línea. El panel actualiza solo los datos afectados por una operación y carga los recursos iniciales en paralelo.
 

@@ -1,0 +1,7 @@
+.git
+.idea
+.local
+logs
+target
+frontend
+*.pem
