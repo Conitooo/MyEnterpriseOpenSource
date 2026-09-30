@@ -32,6 +32,8 @@ build/
 ### VS Code ###
 .vscode/
 .env
+.env.*
+backups/
 .local/
 logs/
 frontend/node_modules/

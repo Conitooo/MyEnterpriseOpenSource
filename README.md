@@ -33,6 +33,11 @@ The project currently includes:
 - Stock reservations
 - Shipments and shipment items
 - Inventory movement history
+- Customer records and delivery addresses
+- Product and warehouse editing/deactivation
+- Stock transfers, physical counts, and shipment returns
+- Paged customer, product, and order lists
+- Health and metrics endpoints
 - JPA entity mappings
 - Spring Data JPA repositories
 - REST endpoints for companies, products, warehouses, inventory, orders and shipments
@@ -48,21 +53,34 @@ Las entidades y repositorios están bajo `com.myenterpriseos.myenterpriseopensou
 | Method | Path | Purpose |
 |---|---|---|
 | POST / GET | `/api/companies/{companyId}/products` | Create or list products |
+| GET | `/api/companies/{companyId}/products/search?page=0&size=20&q=...` | Search products with pagination |
+| PUT / POST | `/api/companies/{companyId}/products/{productId}` / `.../deactivate` | Edit or deactivate a product |
+| POST / GET | `/api/companies/{companyId}/customers` | Create or search customers |
+| PUT / POST | `/api/companies/{companyId}/customers/{customerId}` / `.../deactivate` | Edit or deactivate a customer |
 | POST / GET | `/api/companies/{companyId}/warehouses` | Create or list warehouses |
+| PUT / POST | `/api/companies/{companyId}/warehouses/{warehouseId}` / `.../deactivate` | Edit or deactivate a warehouse |
 | POST / GET | `/api/warehouses/{warehouseId}/inventory` | Receive stock or list inventory |
 | POST | `/api/inventory/{inventoryId}/adjustments` | Adjust stock |
+| POST | `/api/inventory/{inventoryId}/stocktake` | Set stock to a physical count |
+| POST | `/api/companies/{companyId}/transfers` | Transfer available stock between warehouses |
 | GET | `/api/inventory/{inventoryId}/movements` | View stock history |
 | POST / GET | `/api/companies/{companyId}/orders` | Create or list orders |
+| GET | `/api/companies/{companyId}/orders/search?page=0&size=20` | List orders with pagination |
 | GET | `/api/orders/{orderId}` | View an order |
 | GET | `/api/orders/{orderId}/shipments` | List its shipments |
 | POST | `/api/orders/{orderId}/confirm` | Allocate and reserve all order lines |
 | POST | `/api/orders/{orderId}/cancel` | Cancel an unshipped order |
 | POST | `/api/orders/{orderId}/shipments` | Ship reserved items, including partial shipments |
+| POST | `/api/orders/{orderId}/returns` | Return shipped units to stock |
 | GET | `/api/audit-events?page=0&size=50` | Ver operaciones auditadas de la empresa (solo ADMIN) |
+| GET | `/actuator/health` | Health and readiness (public) |
+| GET | `/actuator/metrics` | Application metrics (ADMIN) |
 
 Confirmation requires `allocations` with `orderItemId`, `inventoryId`, and `quantity` for every order line. A shipment requires `warehouseId` and `items` with `orderItemId` and `quantity`. The service checks company ownership, available stock and order state inside database transactions. Inventory rows are locked while reserving or changing stock.
 
-All API endpoints except login require a bearer JWT. The security layer checks the account and its current role against the database on every request. Requests cannot access a different company by changing an ID in the URL.
+Los pedidos nuevos requieren `customerId`, `deliveryAddress` (`recipient`, `street`, `city`, `postalCode`, `country`) e `items`. Los pedidos antiguos permanecen legibles aunque no tengan cliente o dirección. Un envío puede incluir `carrier` y `trackingNumber`. La respuesta de envíos incluye el ID de cada artículo enviado y sus unidades devueltas; ese ID se usa al registrar una devolución. La devolución repone el inventario del almacén original y no puede superar las unidades enviadas. En operaciones reales, inspecciona el material devuelto antes de volver a ponerlo a la venta.
+
+All API endpoints except login, code-protected registration and health require a bearer JWT. The security layer checks the account and its current role against the database on every request. Requests cannot access a different company by changing an ID in the URL.
 
 ## Authentication and authorization
 
@@ -77,7 +95,7 @@ openssl pkey -in jwt-private.pem -pubout -out jwt-public.pem
 
 Keep the private key outside the repository with restricted file permissions. Set `JWT_PRIVATE_KEY_LOCATION` and `JWT_PUBLIC_KEY_LOCATION` to Spring resource locations (for example `file:C:/secure/jwt-private.pem`) and set `JWT_ISSUER` to a stable HTTPS issuer URI. The application fails to start if the keys or issuer are missing or the key pair is invalid. The PEM files under `src/test/resources` are test-only fixtures and must never be used outside tests.
 
-There is no public registration endpoint. In `local`, the first startup creates a demo company and admin with a random password in `.local/credentials.txt` (ignored by Git). This happens only when there are no users. The file is not regenerated for an existing database; keep the password you changed it to. In `prod`, create the first administrator by starting the application once with `APP_SECURITY_BOOTSTRAP_ENABLED=true`, `BOOTSTRAP_COMPANY_NAME`, `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`. For an existing company, use `BOOTSTRAP_COMPANY_ID` instead of the name. Remove the bootstrap variables after the account is created.
+El registro de empresas (`POST /api/auth/register`) requiere `companyName`, `username`, `password` y un código de registro. En `local`, el código es `local-development-registration-code` y el panel ofrece el formulario. En `prod`, el registro está deshabilitado salvo que configures `APP_REGISTRATION_CODE` con un valor secreto de al menos 24 caracteres. No publiques ese código. En `local`, el primer inicio también crea una empresa demo y un administrador con contraseña aleatoria en `.local/credentials.txt` (fuera de Git); el archivo no se regenera si ya existen usuarios. En `prod`, puedes crear el primer administrador con `APP_SECURITY_BOOTSTRAP_ENABLED=true`, `BOOTSTRAP_COMPANY_NAME`, `BOOTSTRAP_ADMIN_USERNAME` y `BOOTSTRAP_ADMIN_PASSWORD`. Para una empresa existente usa `BOOTSTRAP_COMPANY_ID`. Retira estas variables después de crear la cuenta.
 
 Login with `POST /api/auth/login` using `companyId`, `username` and `password`. Send the returned token as `Authorization: Bearer <accessToken>`. `GET /api/auth/me` returns the signed-in user. Administrators can list users with `GET /api/users`, create users with `POST /api/users`, reset a lost password with `POST /api/users/{userId}/reset-password` and deactivate accounts with `POST /api/users/{userId}/deactivate`; authenticated users can change their own password with `POST /api/users/change-password`. A reset accepts `{ "newPassword": "..." }`, clears a login lock and invalidates all existing tokens for that account.
 
@@ -92,7 +110,7 @@ Si aparece `Invalid credentials`, comprueba el ID de empresa, el nombre de usuar
 
 ## Automated tests
 
-Run `./mvnw test` (or `.\mvnw.cmd test` on Windows). Tests use an in-memory H2 database in MySQL mode and apply the real Flyway migrations. They create and roll back their own data; no sample records or external MySQL server are needed. Unit tests use mocked repositories to check business rules without starting a database. Security integration tests issue real JWTs and check login, role permissions, company isolation, password resets, account deactivation, lockout and tenant-scoped audit events.
+Run `./mvnw test` (or `.\mvnw.cmd test` on Windows). Most tests use an in-memory H2 database in MySQL mode and apply the real Flyway migrations. Unit tests use mocked repositories. The MySQL concurrency test uses Testcontainers when Docker is available and checks that simultaneous confirmations cannot oversell. Security integration tests issue real JWTs and check login, registration, roles, company isolation, password resets, account deactivation, lockout and tenant-scoped audit events. Run `pnpm test --watch=false` inside `frontend` for Angular tests. GitHub Actions runs both suites on push and pull requests.
 
 ## Domain Overview
 
@@ -112,6 +130,9 @@ Main domain entities:
 - `ShipmentItem`
 - `InventoryMovement`
 - `AuditEvent`
+- `Customer`
+- `StockTransfer`
+- `StockReturn`
 
 The database contains constraints and relationships to protect important business invariants such as:
 
@@ -146,6 +167,10 @@ El perfil por defecto es `local`: si ejecutas Spring Boot con Maven, usa `compos
 En `local`, al iniciar una empresa sin productos, almacenes ni pedidos, se cargan datos de demostración: tres productos, dos almacenes, existencias, movimientos y cuatro pedidos en estados borrador, confirmado, enviado y parcialmente enviado. La carga se omite en reinicios y en empresas con datos operativos existentes. Para desactivarla establece `APP_DEMO_SEED_ENABLED=false` antes de arrancar. El perfil `prod` nunca carga estos datos.
 
 El perfil `prod` desactiva Docker Compose y requiere `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_PRIVATE_KEY_LOCATION`, `JWT_PUBLIC_KEY_LOCATION` y `JWT_ISSUER`. Actívalo con `SPRING_PROFILES_ACTIVE=prod`. Mantén los secretos fuera del repositorio.
+
+Para un despliegue con HTTPS, copia `env.prod.example` a `.env.prod`, configura un dominio que apunte al servidor, contraseñas únicas y rutas absolutas a claves RSA privadas/públicas. Después ejecuta `docker compose --env-file .env.prod -f compose.prod.yaml up --build -d`. Caddy publica 80/443 y obtiene el certificado TLS; MySQL y el backend quedan en la red interna de Compose. Abre únicamente el dominio HTTPS. El registro público queda cerrado si `APP_REGISTRATION_CODE` está vacío. Protege `.env.prod` y la clave privada fuera del repositorio.
+
+Antes de actualizar o migrar, ejecuta `.\scripts\backup-and-verify.ps1` para el stack local o `.\scripts\backup-and-verify.ps1 -Mode prod` para producción. El script guarda un volcado en `backups/` (fuera de Git), lo restaura en una base temporal y verifica tablas clave. Conserva copias fuera de la máquina y programa esta tarea con el planificador del servidor; prueba también una restauración en un entorno separado antes de depender de las copias. Para monitorización, comprueba `/actuator/health` y configura alertas externas sobre disponibilidad, errores y latencia; `/actuator/metrics` requiere un JWT de administrador.
 
 ## Running the Project
 
@@ -496,9 +521,6 @@ Database credentials and JWT signing keys are read from environment variables an
 
 Planned development includes:
 
-- Stock transfers between warehouses
-- Concurrent request testing
-- Testcontainers
 - Advanced SQL queries
 - Índices adicionales en las rutas de lectura frecuentes
 - `EXPLAIN ANALYZE`
@@ -508,8 +530,7 @@ Planned development includes:
 - RabbitMQ or Kafka
 - Idempotent event processing
 - Database/broker consistency
-- Métricas y alertas
-- Metrics
+- Alertas operativas y exportación de métricas a un sistema externo
 - Exportación centralizada de logs
 
 ## Main Goal

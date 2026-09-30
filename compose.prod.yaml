@@ -1,0 +1,70 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: myenterpriseos
+      MYSQL_USER: myenterpriseos
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD}
+    volumes:
+      - mysql-prod-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: .
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_ADDRESS: 0.0.0.0
+      DB_URL: jdbc:mysql://mysql:3306/myenterpriseos
+      DB_USERNAME: myenterpriseos
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      JWT_ISSUER: https://${APP_DOMAIN:?Set APP_DOMAIN}
+      JWT_PRIVATE_KEY_LOCATION: file:/run/secrets/jwt_private
+      JWT_PUBLIC_KEY_LOCATION: file:/run/secrets/jwt_public
+      APP_REGISTRATION_CODE: ${APP_REGISTRATION_CODE:-}
+    secrets:
+      - jwt_private
+      - jwt_public
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  mysql-prod-data:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  jwt_private:
+    file: ${JWT_PRIVATE_KEY_PATH:?Set JWT_PRIVATE_KEY_PATH}
+  jwt_public:
+    file: ${JWT_PUBLIC_KEY_PATH:?Set JWT_PUBLIC_KEY_PATH}

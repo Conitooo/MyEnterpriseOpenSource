@@ -3,6 +3,7 @@ package com.myenterpriseos.myenterpriseopensource.service;
 import com.myenterpriseos.myenterpriseopensource.api.ApiException;
 import com.myenterpriseos.myenterpriseopensource.dto.AuthDtos.*;
 import com.myenterpriseos.myenterpriseopensource.entity.AppUser;
+import com.myenterpriseos.myenterpriseopensource.entity.Company;
 import com.myenterpriseos.myenterpriseopensource.enums.UserRole;
 import com.myenterpriseos.myenterpriseopensource.repository.AppUserRepository;
 import com.myenterpriseos.myenterpriseopensource.repository.CompanyRepository;
@@ -18,6 +19,7 @@ import org.springframework.security.oauth2.jwt.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -31,10 +33,12 @@ public class AuthService {
     private final TenantGuard tenant;
     private final String issuer;
     private final String dummyHash;
+    private final String registrationCode;
 
     public AuthService(AppUserRepository users, CompanyRepository companies, PasswordEncoder passwords,
                        JwtEncoder encoder, TenantGuard tenant,
-                       @Value("${app.security.jwt.issuer}") String issuer) {
+                       @Value("${app.security.jwt.issuer}") String issuer,
+                       @Value("${app.registration.code:}") String registrationCode) {
         this.users = users;
         this.companies = companies;
         this.passwords = passwords;
@@ -42,6 +46,29 @@ public class AuthService {
         this.tenant = tenant;
         this.issuer = issuer;
         this.dummyHash = passwords.encode(UUID.randomUUID().toString());
+        this.registrationCode = registrationCode;
+        if (!registrationCode.isBlank() && registrationCode.length() < 24)
+            throw new IllegalStateException("Registration code must have at least 24 characters");
+    }
+
+    @Transactional
+    public RegistrationResponse register(RegisterRequest body) {
+        if (registrationCode.isBlank() || !MessageDigest.isEqual(
+                registrationCode.getBytes(StandardCharsets.UTF_8),
+                body.registrationCode().getBytes(StandardCharsets.UTF_8)))
+            throw new ApiException(HttpStatus.FORBIDDEN, "Registration unavailable or invalid code");
+        PasswordRules.validate(body.password());
+        Company company = new Company();
+        company.setName(body.companyName().trim());
+        companies.saveAndFlush(company);
+        AppUser admin = new AppUser();
+        admin.setCompany(company);
+        admin.setUsername(body.username().trim());
+        admin.setPasswordHash(passwords.encode(body.password()));
+        admin.setRole(UserRole.ADMIN);
+        admin.setActive(true);
+        users.save(admin);
+        return new RegistrationResponse(company.getId(), admin.getUsername());
     }
 
     @Transactional(noRollbackFor = BadCredentialsException.class)

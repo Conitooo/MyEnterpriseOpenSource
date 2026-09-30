@@ -31,6 +31,9 @@ public class Product {
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(nullable = false)
+    private boolean active = true;
+
     public Long getId() { return id; }
     public void setId(Long value) { this.id = value; }
 
@@ -51,4 +54,6 @@ public class Product {
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant value) { this.createdAt = value; }
+    public boolean isActive() { return active; }
+    public void setActive(boolean value) { active = value; }
 }

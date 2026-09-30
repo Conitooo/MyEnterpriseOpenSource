@@ -29,6 +29,8 @@ public class Shipment {
 
     @Column(name = "shipped_at")
     private Instant shippedAt;
+    private String carrier;
+    @Column(name = "tracking_number") private String trackingNumber;
 
     public Long getId() { return id; }
     public void setId(Long value) { this.id = value; }
@@ -47,4 +49,8 @@ public class Shipment {
 
     public Instant getShippedAt() { return shippedAt; }
     public void setShippedAt(Instant value) { this.shippedAt = value; }
+    public String getCarrier() { return carrier; }
+    public void setCarrier(String value) { carrier = value; }
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String value) { trackingNumber = value; }
 }

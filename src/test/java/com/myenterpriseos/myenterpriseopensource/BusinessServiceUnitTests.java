@@ -29,6 +29,9 @@ class BusinessServiceUnitTests {
     @Mock StockReservationRepository reservations;
     @Mock ShipmentRepository shipments;
     @Mock ShipmentItemRepository shipmentItems;
+    @Mock CustomerRepository customers;
+    @Mock StockTransferRepository transfers;
+    @Mock StockReturnRepository returns;
     @InjectMocks BusinessService service;
 
     private Company company(long id) {
@@ -54,7 +57,7 @@ class BusinessServiceUnitTests {
         Product product = new Product();
         product.setId(20L);
         product.setCompany(company(2));
-        when(warehouses.findById(10L)).thenReturn(Optional.of(warehouse));
+        when(warehouses.lockById(10L)).thenReturn(Optional.of(warehouse));
         when(products.findById(20L)).thenReturn(Optional.of(product));
         assertThrows(ApiException.class, () -> service.addStock(10L, new StockRequest(20L, 5)));
         verify(inventories, never()).save(any());
@@ -66,8 +69,7 @@ class BusinessServiceUnitTests {
         stock.setId(1L);
         stock.setQuantity(5);
         when(inventories.lockById(1L)).thenReturn(Optional.of(stock));
-        when(reservations.sumQuantityByInventoryIdAndStatus(1L, ReservationStatus.ACTIVE))
-                .thenReturn(4L);
+        when(reservations.activeQuantitiesForUpdate(1L)).thenReturn(List.of(4));
         assertThrows(ApiException.class, () -> service.adjust(1L, new AdjustmentRequest(-2, "damage")));
         assertEquals(5, stock.getQuantity());
         verify(movements, never()).save(any());

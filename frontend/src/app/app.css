@@ -10,3 +10,11 @@
 :host .credentials dd { margin: 7px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 :host .audit-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 16px 24px; }
 :host .request-id { font-size: 11px; overflow-wrap: anywhere; }
+:host .search-row { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
+:host .search-row input { margin: 0; flex: 1; }
+:host .search-row .subtle { margin: 0; flex: none; min-width: 76px; }
+:host .transfer-card { margin-top: 20px; max-width: 860px; }
+:host .delivery-summary { display: grid; gap: 5px; background: #f6faf8; border: 1px solid #e1ebe5; padding: 13px; border-radius: 7px; margin-bottom: 16px; font-size: 12px; color: #526f69; }
+:host .delivery-summary strong { color: #244d3e; font-size: 13px; }
+:host hr { border: 0; border-top: 1px solid #e8efec; margin: 25px 0; }
+:host .shipment-list small { color: #82939a; }

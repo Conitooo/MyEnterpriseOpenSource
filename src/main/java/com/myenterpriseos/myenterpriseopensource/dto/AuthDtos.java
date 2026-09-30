@@ -10,6 +10,11 @@ public final class AuthDtos {
                                @NotBlank @Size(max = 255) String username,
                                @NotBlank String password) {}
     public record TokenResponse(String accessToken, String tokenType, long expiresIn) {}
+    public record RegisterRequest(@NotBlank @Size(max = 255) String companyName,
+                                  @NotBlank @Size(max = 255) String username,
+                                  @NotBlank String password,
+                                  @NotBlank String registrationCode) {}
+    public record RegistrationResponse(Long companyId, String username) {}
     public record CreateUserRequest(@NotBlank @Size(max = 255) String username,
                                     @NotBlank String password,
                                     @NotNull UserRole role) {}

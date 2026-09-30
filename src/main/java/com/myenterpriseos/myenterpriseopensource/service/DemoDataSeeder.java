@@ -58,6 +58,9 @@ public class DemoDataSeeder implements ApplicationRunner {
     }
 
     private void seed(Long companyId) {
+        CustomerResponse customer = business.createCustomer(companyId,
+                new CustomerRequest("Cliente demo", "demo@example.invalid", null));
+        DeliveryAddress address = new DeliveryAddress("Cliente demo", "Calle Demo 1", "Madrid", "28001", "España");
         ProductResponse keyboard = business.createProduct(companyId,
                 new ProductRequest("Teclado mecánico", "DEMO-TEC-001", new BigDecimal("59.90"), "EUR"));
         ProductResponse mouse = business.createProduct(companyId,
@@ -77,27 +80,27 @@ public class DemoDataSeeder implements ApplicationRunner {
         InventoryResponse monitorCentral = business.addStock(central.id(), new StockRequest(monitor.id(), 12));
         business.adjust(keyboardCentral.id(), new AdjustmentRequest(3, "Reposición de demostración"));
 
-        business.createOrder(companyId, new OrderRequest(List.of(
+        business.createOrder(companyId, new OrderRequest(customer.id(), address, List.of(
                 new OrderLineRequest(keyboard.id(), 2), new OrderLineRequest(mouse.id(), 1))));
 
-        OrderResponse confirmed = business.createOrder(companyId, new OrderRequest(List.of(
+        OrderResponse confirmed = business.createOrder(companyId, new OrderRequest(customer.id(), address, List.of(
                 new OrderLineRequest(monitor.id(), 2), new OrderLineRequest(mouse.id(), 3))));
         business.confirm(confirmed.id(), new ConfirmRequest(List.of(
                 new AllocationRequest(confirmed.items().get(0).id(), monitorCentral.id(), 2),
                 new AllocationRequest(confirmed.items().get(1).id(), mouseNorth.id(), 3))));
 
-        OrderResponse shipped = business.createOrder(companyId, new OrderRequest(List.of(
+        OrderResponse shipped = business.createOrder(companyId, new OrderRequest(customer.id(), address, List.of(
                 new OrderLineRequest(keyboard.id(), 3))));
         business.confirm(shipped.id(), new ConfirmRequest(List.of(
                 new AllocationRequest(shipped.items().get(0).id(), keyboardCentral.id(), 3))));
-        business.ship(shipped.id(), new ShipmentRequest(central.id(), List.of(
+        business.ship(shipped.id(), new ShipmentRequest(central.id(), "Demo Carrier", "DEMO-001", List.of(
                 new ShipmentLineRequest(shipped.items().get(0).id(), 3))));
 
-        OrderResponse partial = business.createOrder(companyId, new OrderRequest(List.of(
+        OrderResponse partial = business.createOrder(companyId, new OrderRequest(customer.id(), address, List.of(
                 new OrderLineRequest(mouse.id(), 6))));
         business.confirm(partial.id(), new ConfirmRequest(List.of(
                 new AllocationRequest(partial.items().get(0).id(), mouseNorth.id(), 6))));
-        business.ship(partial.id(), new ShipmentRequest(north.id(), List.of(
+        business.ship(partial.id(), new ShipmentRequest(north.id(), "Demo Carrier", "DEMO-002", List.of(
                 new ShipmentLineRequest(partial.items().get(0).id(), 2))));
     }
 }
