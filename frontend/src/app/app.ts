@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Component, inject, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, inject, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 
@@ -27,6 +27,7 @@ interface AuditPage { events: AuditEvent[]; total: number; page: number; size: n
 })
 export class App implements OnInit {
   private readonly http = inject(HttpClient);
+  private readonly changeDetector = inject(ChangeDetectorRef);
   token = sessionStorage.getItem('meos_token') || '';
   me: User | null = null;
   section: Section = 'overview';
@@ -94,7 +95,7 @@ export class App implements OnInit {
     catch (e) {
       if ((e as HttpErrorResponse).status === 401) this.logout();
       else this.error = 'No se pudieron cargar los datos. Comprueba la conexión y actualiza.';
-    }
+    } finally { this.changeDetector.markForCheck(); }
   }
 
   private async get<T>(url: string): Promise<T> { return firstValueFrom(this.http.get<T>(url)); }
@@ -130,24 +131,27 @@ export class App implements OnInit {
     this.issuedCredentials = null;
     this.resetUserId = 0; this.resetPasswordValue = '';
     this.section = 'overview';
+    this.changeDetector.markForCheck();
   }
 
   async refresh(): Promise<void> {
-    this.me = await this.get<User>('/api/auth/me');
-    const [products, warehouses, orders, users] = await Promise.all([
-      this.get<Product[]>(`${this.companyUrl}/products`),
-      this.get<Warehouse[]>(`${this.companyUrl}/warehouses`),
-      this.get<Order[]>(`${this.companyUrl}/orders`),
-      this.canCatalog ? this.get<User[]>('/api/users') : Promise.resolve([]),
-    ]);
-    this.products = products; this.warehouses = warehouses; this.orders = orders; this.users = users;
-    if (!warehouses.some(w => w.id === this.selectedWarehouseId)) this.selectedWarehouseId = warehouses[0]?.id || 0;
-    if (!warehouses.some(w => w.id === this.shipmentForm.warehouseId)) this.shipmentForm.warehouseId = warehouses[0]?.id || 0;
-    this.allStocks = (await Promise.all(warehouses.map(w =>
-      this.get<Stock[]>(`/api/warehouses/${w.id}/inventory`)))).flat();
-    this.stocks = this.allStocks.filter(s => s.warehouseId === this.selectedWarehouseId);
-    if (this.selectedOrderId) await this.selectOrder(this.selectedOrderId);
-    if (this.section === 'audit' && this.canCatalog) await this.loadAudit();
+    try {
+      this.me = await this.get<User>('/api/auth/me');
+      const [products, warehouses, orders, users] = await Promise.all([
+        this.get<Product[]>(`${this.companyUrl}/products`),
+        this.get<Warehouse[]>(`${this.companyUrl}/warehouses`),
+        this.get<Order[]>(`${this.companyUrl}/orders`),
+        this.canCatalog ? this.get<User[]>('/api/users') : Promise.resolve([]),
+      ]);
+      this.products = products; this.warehouses = warehouses; this.orders = orders; this.users = users;
+      if (!warehouses.some(w => w.id === this.selectedWarehouseId)) this.selectedWarehouseId = warehouses[0]?.id || 0;
+      if (!warehouses.some(w => w.id === this.shipmentForm.warehouseId)) this.shipmentForm.warehouseId = warehouses[0]?.id || 0;
+      this.allStocks = (await Promise.all(warehouses.map(w =>
+        this.get<Stock[]>(`/api/warehouses/${w.id}/inventory`)))).flat();
+      this.stocks = this.allStocks.filter(s => s.warehouseId === this.selectedWarehouseId);
+      if (this.selectedOrderId) await this.selectOrder(this.selectedOrderId);
+      if (this.section === 'audit' && this.canCatalog) await this.loadAudit();
+    } finally { this.changeDetector.markForCheck(); }
   }
 
   private async act(message: string, action: () => Promise<void>): Promise<void> {
@@ -158,7 +162,10 @@ export class App implements OnInit {
       const body = response.error;
       this.error = typeof body === 'string' ? body : body?.error || body?.message || body?.detail || response.message || 'Error inesperado';
       if (response.status === 401 && this.token) this.logout();
-    } finally { this.busy = false; }
+    } finally {
+      this.busy = false;
+      this.changeDetector.markForCheck();
+    }
   }
 
   async changeSection(value: Section): Promise<void> {
@@ -168,10 +175,12 @@ export class App implements OnInit {
       try { await this.loadAudit(); }
       catch { this.error = 'No se pudo cargar la auditoría.'; }
     }
+    this.changeDetector.markForCheck();
   }
 
   async loadAudit(page = 0): Promise<void> {
-    this.audit = await this.get<AuditPage>(`/api/audit-events?page=${page}&size=50`);
+    try { this.audit = await this.get<AuditPage>(`/api/audit-events?page=${page}&size=50`); }
+    finally { this.changeDetector.markForCheck(); }
   }
 
   async createProduct(): Promise<void> {
@@ -192,10 +201,12 @@ export class App implements OnInit {
     });
   }
   async loadStocks(): Promise<void> {
-    if (!this.selectedWarehouseId) { this.stocks = []; return; }
-    const stocks = await this.get<Stock[]>(`/api/warehouses/${this.selectedWarehouseId}/inventory`);
-    this.allStocks = [...this.allStocks.filter(s => s.warehouseId !== this.selectedWarehouseId), ...stocks];
-    this.stocks = stocks;
+    try {
+      if (!this.selectedWarehouseId) { this.stocks = []; return; }
+      const stocks = await this.get<Stock[]>(`/api/warehouses/${this.selectedWarehouseId}/inventory`);
+      this.allStocks = [...this.allStocks.filter(s => s.warehouseId !== this.selectedWarehouseId), ...stocks];
+      this.stocks = stocks;
+    } finally { this.changeDetector.markForCheck(); }
   }
   async receiveStock(): Promise<void> {
     await this.act('Entrada de stock registrada', async () => {
@@ -206,7 +217,8 @@ export class App implements OnInit {
   }
   async selectStock(id: number): Promise<void> {
     this.selectedStockId = id;
-    this.movements = await this.get<Movement[]>(`/api/inventory/${id}/movements`);
+    try { this.movements = await this.get<Movement[]>(`/api/inventory/${id}/movements`); }
+    finally { this.changeDetector.markForCheck(); }
   }
   async adjustStock(): Promise<void> {
     await this.act('Ajuste registrado', async () => {
@@ -238,17 +250,19 @@ export class App implements OnInit {
   async selectOrder(id: number): Promise<void> {
     if (this.selectedOrderId !== id) this.allocations = [];
     this.selectedOrderId = id;
-    const [order, shipments] = await Promise.all([
-      this.get<Order>(`/api/orders/${id}`), this.get<Shipment[]>(`/api/orders/${id}/shipments`),
-    ]);
-    this.replaceOrder(order);
-    this.shipments = shipments;
-    if (order.status === 'DRAFT' && !this.allocations.length) {
-      this.allocations = order.items.map(line => ({ orderItemId: line.id, inventoryId: 0, quantity: line.quantity }));
-    }
-    for (const line of order.items) {
-      if (!(line.id in this.shipmentQuantities)) this.shipmentQuantities[line.id] = line.quantity;
-    }
+    try {
+      const [order, shipments] = await Promise.all([
+        this.get<Order>(`/api/orders/${id}`), this.get<Shipment[]>(`/api/orders/${id}/shipments`),
+      ]);
+      this.replaceOrder(order);
+      this.shipments = shipments;
+      if (order.status === 'DRAFT' && !this.allocations.length) {
+        this.allocations = order.items.map(line => ({ orderItemId: line.id, inventoryId: 0, quantity: line.quantity }));
+      }
+      for (const line of order.items) {
+        if (!(line.id in this.shipmentQuantities)) this.shipmentQuantities[line.id] = line.quantity;
+      }
+    } finally { this.changeDetector.markForCheck(); }
   }
   async confirmOrder(): Promise<void> {
     await this.act('Pedido confirmado y stock reservado', async () => {
