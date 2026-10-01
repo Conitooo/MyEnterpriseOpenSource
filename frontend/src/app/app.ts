@@ -1,26 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectorRef, Component, inject, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, DestroyRef, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { firstValueFrom } from 'rxjs';
-
-type Role = 'ADMIN' | 'WAREHOUSE_MANAGER' | 'SALES' | 'VIEWER';
-type Section = 'overview' | 'customers' | 'products' | 'warehouses' | 'inventory' | 'orders' | 'users' | 'audit';
-interface User { id: number; companyId: number; username: string; role: Role; active: boolean }
-interface Customer { id: number; companyId: number; name: string; email: string | null; phone: string | null; active: boolean }
-interface Product { id: number; productName: string; sku: string; price: number; currency: string; active: boolean }
-interface Warehouse { id: number; code: string; name: string; active: boolean }
-interface Stock { id: number; productId: number; warehouseId: number; quantity: number; available: number }
-interface Movement { id: number; type: string; quantityChange: number; reason: string }
-interface OrderLine { id: number; productId: number; productName: string; quantity: number; price: number; currency: string }
-interface DeliveryAddress { recipient: string; street: string; city: string; postalCode: string; country: string }
-interface Order { id: number; customerId: number | null; customerName: string | null; deliveryAddress: DeliveryAddress | null; status: string; items: OrderLine[] }
-interface ShipmentLine { id: number; orderItemId: number; quantity: number; returnedQuantity: number }
-interface Shipment { id: number; orderId: number; warehouseId: number; status: string; carrier: string | null; trackingNumber: string | null; items: ShipmentLine[] }
-interface Token { accessToken: string; expiresIn: number }
-interface Page<T> { items: T[]; total: number; page: number; size: number }
-interface AuditEvent { id: number; occurredAt: string; actorUserId: number | null; username: string | null; requestId: string; httpMethod: string; route: string; path: string; statusCode: number; durationMs: number }
-interface AuditPage { events: AuditEvent[]; total: number; page: number; size: number }
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ApiClient, apiErrorMessage } from './core/api-client.service';
+import { SessionService } from './core/session.service';
+import { Allocation, AuditPage, Customer, DeliveryAddress, Movement, Order, Page, Product, Role, Section, Shipment, Stock, Token, User, Warehouse } from './core/models';
+import { allocationsAreValid, passwordIsValid, positiveInteger } from './core/validators';
 
 @Component({
   selector: 'app-root',
@@ -29,15 +14,23 @@ interface AuditPage { events: AuditEvent[]; total: number; page: number; size: n
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
-export class App implements OnInit {
-  private readonly http = inject(HttpClient);
+export class App {
+  private readonly api = inject(ApiClient);
+  private readonly session = inject(SessionService);
   private readonly changeDetector = inject(ChangeDetectorRef);
-  token = sessionStorage.getItem('meos_token') || '';
-  sessionEndsAt = Number(sessionStorage.getItem('meos_expires_at') || 0);
-  private expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly destroyRef = inject(DestroyRef);
+  private sessionEpoch = 0;
+  private customerRequest = 0;
+  private productRequest = 0;
+  private orderRequest = 0;
+  private stockRequest = 0;
+  private refreshRequest = 0;
+  private actionRequest = 0;
+  get sessionEndsAt(): number { return this.session.expiresAt(); }
   me: User | null = null;
   section: Section = 'overview';
   busy = false;
+  loadingData = false;
   notice = '';
   error = '';
   loginForm = { companyId: 1, username: 'admin', password: '' };
@@ -82,12 +75,20 @@ export class App implements OnInit {
   orderLines: { productId: number; quantity: number }[] = [{ productId: 0, quantity: 1 }];
   orderCustomerId = 0;
   addressForm: DeliveryAddress = { recipient: '', street: '', city: '', postalCode: '', country: 'España' };
-  allocations: { orderItemId: number; inventoryId: number; quantity: number }[] = [];
+  allocations: Allocation[] = [];
   shipmentForm = { warehouseId: 0, carrier: '', trackingNumber: '' };
   shipmentQuantities: Record<number, number> = {};
   returnForm = { shipmentItemId: 0, quantity: 1, reason: '' };
   userForm = { username: '', password: '', role: 'SALES' as Role };
   passwordForm = { currentPassword: '', newPassword: '' };
+
+  constructor() {
+    this.session.expired$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => {
+      this.logout();
+      this.error = 'La sesión ha caducado. Inicia sesión de nuevo.';
+      this.changeDetector.markForCheck();
+    });
+  }
 
   get canCatalog(): boolean { return this.me?.role === 'ADMIN'; }
   get canStock(): boolean { return this.me?.role === 'ADMIN' || this.me?.role === 'WAREHOUSE_MANAGER'; }
@@ -121,45 +122,22 @@ export class App implements OnInit {
     return remaining;
   }
   get allocationsValid(): boolean {
-    const order = this.selectedOrder;
-    if (!order) return false;
-    const complete = order.items.every(line => {
-      const rows = this.allocationsFor(line.id);
-      return rows.length > 0 && rows.every(a => a.inventoryId > 0 && a.quantity > 0) &&
-        rows.reduce((sum, a) => sum + Number(a.quantity), 0) === line.quantity &&
-        new Set(rows.map(a => a.inventoryId)).size === rows.length;
-    });
-    if (!complete) return false;
-    const totals = new Map<number, number>();
-    for (const allocation of this.allocations) {
-      const stock = this.allStocks.find(s => s.id === Number(allocation.inventoryId));
-      const line = order.items.find(i => i.id === allocation.orderItemId);
-      if (!stock || !line || stock.productId !== line.productId) return false;
-      totals.set(stock.id, (totals.get(stock.id) || 0) + Number(allocation.quantity));
-    }
-    return [...totals].every(([id, quantity]) => quantity <= this.allStocks.find(s => s.id === id)!.available);
+    return allocationsAreValid(this.selectedOrder, this.allocations, this.allStocks);
   }
 
-  async ngOnInit(): Promise<void> {
-    if (!this.token) return;
-    if (this.sessionEndsAt && Date.now() >= this.sessionEndsAt) {
-      this.logout(); this.error = 'La sesión ha caducado. Inicia sesión de nuevo.'; return;
-    }
-    this.scheduleExpiry();
-    try { await this.refresh(); }
-    catch (e) {
-      if ((e as HttpErrorResponse).status === 401) this.logout();
-      else this.error = 'No se pudieron cargar los datos. Comprueba la conexión y actualiza.';
-    } finally { this.changeDetector.markForCheck(); }
+  private get<T>(url: string): Promise<T> { return this.api.get<T>(url); }
+  private post<T>(url: string, body: unknown = {}): Promise<T> { return this.api.post<T>(url, body); }
+  private put<T>(url: string, body: unknown): Promise<T> { return this.api.put<T>(url, body); }
+  private validate(condition: boolean, message: string): boolean {
+    if (condition) return true;
+    this.error = message;
+    this.changeDetector.markForCheck();
+    return false;
   }
-
-  private async get<T>(url: string): Promise<T> { return firstValueFrom(this.http.get<T>(url)); }
-  private async post<T>(url: string, body: unknown = {}): Promise<T> { return firstValueFrom(this.http.post<T>(url, body)); }
-  private async put<T>(url: string, body: unknown): Promise<T> { return firstValueFrom(this.http.put<T>(url, body)); }
   private get companyUrl(): string { return `/api/companies/${this.me!.companyId}`; }
   private orderPageUrl(page: number): string {
-    return `${this.companyUrl}/orders/search?page=${page}&size=20&status=${this.orderStatusFilter}` +
-      `&customer=${encodeURIComponent(this.orderCustomerSearch)}`;
+    return `${this.companyUrl}/orders/search?page=${page}&size=20&status=${encodeURIComponent(this.orderStatusFilter)}` +
+      `&customer=${encodeURIComponent(this.orderCustomerSearch.trim())}`;
   }
   private upsertStock(stock: Stock): void {
     this.allStocks = [...this.allStocks.filter(s => s.id !== stock.id), stock];
@@ -169,116 +147,163 @@ export class App implements OnInit {
     if (this.selectedOrderId === order.id) this.selectedOrderDetail = order;
     this.orders = this.orders.map(o => o.id === order.id ? order : o);
   }
-  private scheduleExpiry(): void {
-    if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    if (!this.sessionEndsAt) return;
-    this.expiryTimer = setTimeout(() => {
-      this.logout();
-      this.error = 'La sesión ha caducado. Inicia sesión de nuevo.';
-      this.changeDetector.markForCheck();
-    }, Math.max(0, this.sessionEndsAt - Date.now()));
-  }
-
   async login(): Promise<void> {
-    await this.act('Sesión iniciada', async () => {
+    if (!this.validate(positiveInteger(this.loginForm.companyId) && !!this.loginForm.username.trim() && !!this.loginForm.password,
+      'Introduce el ID de empresa, usuario y contraseña.')) return;
+    const epoch = this.sessionEpoch;
+    await this.act('', async () => {
       const token = await this.post<Token>('/api/auth/login', {
         ...this.loginForm, username: this.loginForm.username.trim(),
       });
-      this.token = token.accessToken;
-      sessionStorage.setItem('meos_token', this.token);
-      this.sessionEndsAt = Date.now() + (token.expiresIn || 900) * 1000;
-      sessionStorage.setItem('meos_expires_at', String(this.sessionEndsAt));
-      this.scheduleExpiry();
+      if (epoch !== this.sessionEpoch) return;
+      this.session.start(token.accessToken, token.expiresIn);
       this.loginForm.password = '';
-      await this.refresh();
+      try {
+        const me = await this.get<User>('/api/auth/me');
+        if (epoch !== this.sessionEpoch) return;
+        this.me = me;
+      }
+      catch (error) { this.session.clear(); throw error; }
+      this.notice = 'Sesión iniciada';
+      this.changeDetector.markForCheck();
+      void this.refresh();
     });
+    this.loginForm.password = '';
   }
 
   async register(): Promise<void> {
+    if (!this.validate(!!this.registerForm.companyName.trim() && !!this.registerForm.username.trim() &&
+      !!this.registerForm.registrationCode && passwordIsValid(this.registerForm.password),
+      'Completa todos los campos. La contraseña debe tener al menos 14 caracteres y 72 bytes UTF-8 como máximo.')) return;
     await this.act('Empresa creada. Ya puedes iniciar sesión.', async () => {
-      const result = await this.post<{ companyId: number; username: string }>('/api/auth/register', this.registerForm);
+      const result = await this.post<{ companyId: number; username: string }>('/api/auth/register', {
+        ...this.registerForm, companyName: this.registerForm.companyName.trim(), username: this.registerForm.username.trim(),
+      });
       this.loginForm = { companyId: result.companyId, username: result.username, password: '' };
       this.registerForm = { companyName: '', username: '', password: '', registrationCode: '' };
       this.registering = false;
     });
+    this.registerForm.password = '';
+    this.registerForm.registrationCode = '';
   }
 
   logout(): void {
-    if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    sessionStorage.removeItem('meos_token');
-    sessionStorage.removeItem('meos_expires_at');
-    this.token = '';
-    this.sessionEndsAt = 0;
+    this.sessionEpoch++;
+    this.customerRequest++; this.productRequest++; this.orderRequest++; this.stockRequest++;
+    this.refreshRequest++; this.loadingData = false;
+    this.actionRequest++; this.busy = false;
+    this.session.clear();
     this.me = null;
     this.products = []; this.customers = []; this.warehouses = []; this.stocks = []; this.allStocks = []; this.orders = []; this.users = [];
     this.productCache = {}; this.customerCache = {};
+    this.productPage = { items: [], total: 0, page: 0, size: 20 };
+    this.customerPage = { items: [], total: 0, page: 0, size: 20 };
+    this.orderPage = { items: [], total: 0, page: 0, size: 20 };
+    this.audit = { events: [], total: 0, page: 0, size: 50 };
+    this.movements = []; this.shipments = [];
     this.selectedOrderId = 0; this.selectedOrderDetail = null; this.selectedStockId = 0; this.selectedWarehouseId = 0;
     this.allocations = [];
     this.issuedCredentials = null;
     this.resetUserId = 0; this.resetPasswordValue = '';
+    this.loginForm.password = '';
+    this.passwordForm = { currentPassword: '', newPassword: '' };
+    this.userForm.password = '';
     this.section = 'overview';
     this.changeDetector.markForCheck();
   }
 
   async refresh(): Promise<void> {
+    if (!this.me || this.loadingData) return;
+    const epoch = this.sessionEpoch;
+    const request = ++this.refreshRequest;
+    this.loadingData = true;
+    this.changeDetector.markForCheck();
     try {
-      this.me = await this.get<User>('/api/auth/me');
-      const [products, customers, warehouses, orders, users] = await Promise.all([
-        this.get<Page<Product>>(`${this.companyUrl}/products/search?page=${this.productPage.page}&size=20&q=${encodeURIComponent(this.productSearch)}`),
-        this.get<Page<Customer>>(`${this.companyUrl}/customers?page=${this.customerPage.page}&size=20&q=${encodeURIComponent(this.customerSearch)}`),
-        this.get<Warehouse[]>(`${this.companyUrl}/warehouses`),
-        this.get<Page<Order>>(this.orderPageUrl(this.orderPage.page)),
-        this.canCatalog ? this.get<User[]>('/api/users') : Promise.resolve([]),
+      const warehousePromise = this.get<Warehouse[]>(`${this.companyUrl}/warehouses`).then(warehouses => {
+        if (epoch !== this.sessionEpoch) return;
+        this.warehouses = warehouses;
+        if (!warehouses.some(w => w.id === this.selectedWarehouseId)) this.selectedWarehouseId = warehouses[0]?.id || 0;
+        if (!warehouses.some(w => w.id === this.shipmentForm.warehouseId)) this.shipmentForm.warehouseId = warehouses[0]?.id || 0;
+        this.changeDetector.markForCheck();
+      });
+      await Promise.all([
+        this.loadProductPage(this.productPage.page), this.loadCustomerPage(this.customerPage.page),
+        this.loadOrderPage(this.orderPage.page), warehousePromise,
       ]);
-      this.productPage = products; this.customerPage = customers; this.orderPage = orders;
-      this.products = products.items; this.customers = customers.items;
-      for (const product of products.items) this.productCache[product.id] = product;
-      for (const customer of customers.items) this.customerCache[customer.id] = customer;
-      this.warehouses = warehouses; this.orders = orders.items; this.users = users;
-      if (!warehouses.some(w => w.id === this.selectedWarehouseId)) this.selectedWarehouseId = warehouses[0]?.id || 0;
-      if (!warehouses.some(w => w.id === this.shipmentForm.warehouseId)) this.shipmentForm.warehouseId = warehouses[0]?.id || 0;
-      this.allStocks = this.selectedWarehouseId ?
-        await this.get<Stock[]>(`/api/warehouses/${this.selectedWarehouseId}/inventory`) : [];
-      this.stocks = this.allStocks.filter(s => s.warehouseId === this.selectedWarehouseId);
+      if (epoch !== this.sessionEpoch) return;
+      await this.loadStocks();
       if (this.selectedOrderId) await this.selectOrder(this.selectedOrderId);
       if (this.section === 'audit' && this.canCatalog) await this.loadAudit();
+      if (this.section === 'users' && this.canCatalog) await this.loadUsers();
+    } catch (error) {
+      if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
+    } finally {
+      if (request === this.refreshRequest) this.loadingData = false;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  private async loadUsers(): Promise<void> {
+    const epoch = this.sessionEpoch;
+    try {
+      const users = await this.get<User[]>('/api/users');
+      if (epoch === this.sessionEpoch) this.users = users;
+    } catch (error) {
+      if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
 
   async loadCustomerPage(page = 0): Promise<void> {
-    this.customerPage.page = page;
+    if (!this.me) return;
+    const request = ++this.customerRequest;
+    const epoch = this.sessionEpoch;
     try {
-      this.customerPage = await this.get<Page<Customer>>(`${this.companyUrl}/customers?page=${page}&size=20&q=${encodeURIComponent(this.customerSearch)}`);
-      this.customers = this.customerPage.items;
-      for (const customer of this.customers) this.customerCache[customer.id] = customer;
+      const result = await this.get<Page<Customer>>(`${this.companyUrl}/customers?page=${page}&size=20&q=${encodeURIComponent(this.customerSearch.trim())}`);
+      if (request !== this.customerRequest || epoch !== this.sessionEpoch) return;
+      this.customerPage = result;
+      this.customers = result.items;
+      for (const customer of result.items) this.customerCache[customer.id] = customer;
+    } catch (error) {
+      if (request === this.customerRequest && epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
   async loadProductPage(page = 0): Promise<void> {
-    this.productPage.page = page;
+    if (!this.me) return;
+    const request = ++this.productRequest;
+    const epoch = this.sessionEpoch;
     try {
-      this.productPage = await this.get<Page<Product>>(`${this.companyUrl}/products/search?page=${page}&size=20&q=${encodeURIComponent(this.productSearch)}`);
-      this.products = this.productPage.items;
-      for (const product of this.products) this.productCache[product.id] = product;
+      const result = await this.get<Page<Product>>(`${this.companyUrl}/products/search?page=${page}&size=20&q=${encodeURIComponent(this.productSearch.trim())}`);
+      if (request !== this.productRequest || epoch !== this.sessionEpoch) return;
+      this.productPage = result;
+      this.products = result.items;
+      for (const product of result.items) this.productCache[product.id] = product;
+    } catch (error) {
+      if (request === this.productRequest && epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
   async loadOrderPage(page = 0): Promise<void> {
-    this.orderPage.page = page;
+    if (!this.me) return;
+    const request = ++this.orderRequest;
+    const epoch = this.sessionEpoch;
     try {
-      this.orderPage = await this.get<Page<Order>>(this.orderPageUrl(page));
-      this.orders = this.orderPage.items;
+      const result = await this.get<Page<Order>>(this.orderPageUrl(page));
+      if (request !== this.orderRequest || epoch !== this.sessionEpoch) return;
+      this.orderPage = result;
+      this.orders = result.items;
+    } catch (error) {
+      if (request === this.orderRequest && epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
 
   private async act(message: string, action: () => Promise<void>): Promise<void> {
+    if (this.busy) return;
+    const epoch = this.sessionEpoch;
+    const request = ++this.actionRequest;
     this.busy = true; this.error = ''; this.notice = '';
-    try { await action(); if (message) this.notice = message; }
-    catch (e) {
-      const response = e as HttpErrorResponse;
-      const body = response.error;
-      this.error = typeof body === 'string' ? body : body?.error || body?.message || body?.detail || response.message || 'Error inesperado';
-      if (response.status === 401 && this.token) this.logout();
-    } finally {
-      this.busy = false;
+    try { await action(); if (message && epoch === this.sessionEpoch) this.notice = message; }
+    catch (error) { if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error); }
+    finally {
+      if (request === this.actionRequest) this.busy = false;
       this.changeDetector.markForCheck();
     }
   }
@@ -286,23 +311,31 @@ export class App implements OnInit {
   async changeSection(value: Section): Promise<void> {
     if (value !== 'users') this.issuedCredentials = null;
     this.section = value; this.error = ''; this.notice = '';
-    if (value === 'audit' && this.canCatalog) {
-      try { await this.loadAudit(); }
-      catch { this.error = 'No se pudo cargar la auditoría.'; }
-    }
+    if (value === 'audit' && this.canCatalog) await this.loadAudit();
+    if (value === 'users' && this.canCatalog) await this.loadUsers();
     this.changeDetector.markForCheck();
   }
 
   async loadAudit(page = 0): Promise<void> {
-    try { this.audit = await this.get<AuditPage>(`/api/audit-events?page=${page}&size=50`); }
+    const epoch = this.sessionEpoch;
+    try {
+      const audit = await this.get<AuditPage>(`/api/audit-events?page=${page}&size=50`);
+      if (epoch === this.sessionEpoch) this.audit = audit;
+    } catch (error) {
+      if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
+    }
     finally { this.changeDetector.markForCheck(); }
   }
 
   async createProduct(): Promise<void> {
+    if (!this.validate(!!this.productForm.productName.trim() && !!this.productForm.sku.trim() &&
+      Number.isFinite(Number(this.productForm.price)) && Number(this.productForm.price) >= 0 &&
+      /^[A-Za-z]{3}$/.test(this.productForm.currency), 'Revisa nombre, SKU, precio y moneda del producto.')) return;
     await this.act('Producto creado', async () => {
       const created = await this.post<Product>(`${this.companyUrl}/products`,
         { ...this.productForm, currency: this.productForm.currency.toUpperCase() });
       this.products = [...this.products, created];
+      this.productCache[created.id] = created;
       await this.loadProductPage();
       this.productForm = { productName: '', sku: '', price: 0, currency: 'EUR' };
     });
@@ -313,6 +346,9 @@ export class App implements OnInit {
       price: product.price, currency: product.currency };
   }
   async saveProduct(): Promise<void> {
+    if (!this.validate(!!this.productForm.productName.trim() && !!this.productForm.sku.trim() &&
+      Number.isFinite(Number(this.productForm.price)) && Number(this.productForm.price) >= 0 &&
+      /^[A-Za-z]{3}$/.test(this.productForm.currency), 'Revisa nombre, SKU, precio y moneda del producto.')) return;
     await this.act('Producto actualizado', async () => {
       await this.put<Product>(`${this.companyUrl}/products/${this.editingProductId}`,
         { ...this.productForm, currency: this.productForm.currency.toUpperCase() });
@@ -325,12 +361,15 @@ export class App implements OnInit {
     if (!confirm('¿Desactivar este producto? Los pedidos anteriores seguirán visibles.')) return;
     await this.act('Producto desactivado', async () => {
       await this.post(`${this.companyUrl}/products/${id}/deactivate`);
+      delete this.productCache[id];
       await this.loadProductPage(this.productPage.page);
     });
   }
   async createCustomer(): Promise<void> {
+    if (!this.validate(!!this.customerForm.name.trim(), 'Introduce el nombre del cliente.')) return;
     await this.act('Cliente creado', async () => {
-      await this.post<Customer>(`${this.companyUrl}/customers`, this.customerForm);
+      const created = await this.post<Customer>(`${this.companyUrl}/customers`, this.customerForm);
+      this.customerCache[created.id] = created;
       this.customerForm = { name: '', email: '', phone: '' };
       await this.loadCustomerPage();
     });
@@ -340,6 +379,7 @@ export class App implements OnInit {
     this.customerForm = { name: customer.name, email: customer.email || '', phone: customer.phone || '' };
   }
   async saveCustomer(): Promise<void> {
+    if (!this.validate(!!this.customerForm.name.trim(), 'Introduce el nombre del cliente.')) return;
     await this.act('Cliente actualizado', async () => {
       await this.put<Customer>(`${this.companyUrl}/customers/${this.editingCustomerId}`, this.customerForm);
       this.editingCustomerId = 0;
@@ -351,10 +391,13 @@ export class App implements OnInit {
     if (!confirm('¿Desactivar este cliente?')) return;
     await this.act('Cliente desactivado', async () => {
       await this.post(`${this.companyUrl}/customers/${id}/deactivate`);
+      delete this.customerCache[id];
       await this.loadCustomerPage(this.customerPage.page);
     });
   }
   async createWarehouse(): Promise<void> {
+    if (!this.validate(!!this.warehouseForm.code.trim() && !!this.warehouseForm.name.trim(),
+      'Introduce el código y el nombre del almacén.')) return;
     await this.act('Almacén creado', async () => {
       const created = await this.post<Warehouse>(`${this.companyUrl}/warehouses`, this.warehouseForm);
       this.warehouses = [...this.warehouses, created];
@@ -368,6 +411,8 @@ export class App implements OnInit {
     this.warehouseForm = { code: warehouse.code, name: warehouse.name };
   }
   async saveWarehouse(): Promise<void> {
+    if (!this.validate(!!this.warehouseForm.code.trim() && !!this.warehouseForm.name.trim(),
+      'Introduce el código y el nombre del almacén.')) return;
     await this.act('Almacén actualizado', async () => {
       const warehouse = await this.put<Warehouse>(`${this.companyUrl}/warehouses/${this.editingWarehouseId}`, this.warehouseForm);
       this.warehouses = this.warehouses.map(w => w.id === warehouse.id ? warehouse : w);
@@ -382,14 +427,23 @@ export class App implements OnInit {
     });
   }
   async loadStocks(): Promise<void> {
+    const request = ++this.stockRequest;
+    const epoch = this.sessionEpoch;
+    const warehouseId = this.selectedWarehouseId;
     try {
-      if (!this.selectedWarehouseId) { this.stocks = []; return; }
-      const stocks = await this.get<Stock[]>(`/api/warehouses/${this.selectedWarehouseId}/inventory`);
-      this.allStocks = [...this.allStocks.filter(s => s.warehouseId !== this.selectedWarehouseId), ...stocks];
+      if (!warehouseId) { this.stocks = []; return; }
+      this.stocks = [];
+      const stocks = await this.get<Stock[]>(`/api/warehouses/${warehouseId}/inventory`);
+      if (request !== this.stockRequest || epoch !== this.sessionEpoch || warehouseId !== this.selectedWarehouseId) return;
+      this.allStocks = [...this.allStocks.filter(s => s.warehouseId !== warehouseId), ...stocks];
       this.stocks = stocks;
+    } catch (error) {
+      if (request === this.stockRequest && epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
   async receiveStock(): Promise<void> {
+    if (!this.validate(positiveInteger(this.selectedWarehouseId) && positiveInteger(this.receiptForm.productId) &&
+      positiveInteger(this.receiptForm.quantity), 'Selecciona un almacén, producto y una cantidad válida.')) return;
     await this.act('Entrada de stock registrada', async () => {
       const stock = await this.post<Stock>(`/api/warehouses/${this.selectedWarehouseId}/inventory`, this.receiptForm);
       this.upsertStock(stock);
@@ -398,10 +452,19 @@ export class App implements OnInit {
   }
   async selectStock(id: number): Promise<void> {
     this.selectedStockId = id;
-    try { this.movements = await this.get<Movement[]>(`/api/inventory/${id}/movements`); }
+    const epoch = this.sessionEpoch;
+    try {
+      const movements = await this.get<Movement[]>(`/api/inventory/${id}/movements`);
+      if (epoch === this.sessionEpoch && id === this.selectedStockId) this.movements = movements;
+    } catch (error) {
+      if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
+    }
     finally { this.changeDetector.markForCheck(); }
   }
   async adjustStock(): Promise<void> {
+    if (!this.validate(positiveInteger(this.selectedStockId) && Number.isSafeInteger(Number(this.adjustmentForm.quantityChange)) &&
+      Number(this.adjustmentForm.quantityChange) !== 0 && !!this.adjustmentForm.reason.trim(),
+      'Introduce un ajuste distinto de cero y un motivo.')) return;
     await this.act('Ajuste registrado', async () => {
       const stock = await this.post<Stock>(`/api/inventory/${this.selectedStockId}/adjustments`, this.adjustmentForm);
       this.upsertStock(stock);
@@ -410,6 +473,9 @@ export class App implements OnInit {
     });
   }
   async stocktake(): Promise<void> {
+    if (!this.validate(positiveInteger(this.selectedStockId) && Number.isSafeInteger(Number(this.stocktakeForm.countedQuantity)) &&
+      Number(this.stocktakeForm.countedQuantity) >= 0 && !!this.stocktakeForm.reason.trim(),
+      'Introduce una cantidad válida y un motivo para el recuento.')) return;
     await this.act('Recuento registrado', async () => {
       const stock = await this.post<Stock>(`/api/inventory/${this.selectedStockId}/stocktake`, this.stocktakeForm);
       this.upsertStock(stock);
@@ -418,6 +484,11 @@ export class App implements OnInit {
     });
   }
   async transferStock(): Promise<void> {
+    if (!this.validate(positiveInteger(this.transferForm.sourceWarehouseId) &&
+      positiveInteger(this.transferForm.destinationWarehouseId) &&
+      this.transferForm.sourceWarehouseId !== this.transferForm.destinationWarehouseId &&
+      positiveInteger(this.transferForm.productId) && positiveInteger(this.transferForm.quantity),
+      'Selecciona dos almacenes distintos, un producto y una cantidad válida.')) return;
     await this.act('Traslado registrado', async () => {
       await this.post(`${this.companyUrl}/transfers`, this.transferForm);
       await this.loadStocks();
@@ -432,6 +503,11 @@ export class App implements OnInit {
     this.allocations = this.allocations.filter(a => a !== item);
   }
   async createOrder(): Promise<void> {
+    if (!this.validate(positiveInteger(this.orderCustomerId) && this.orderLines.length > 0 &&
+      this.orderLines.every(line => positiveInteger(line.productId) && positiveInteger(line.quantity)) &&
+      new Set(this.orderLines.map(line => Number(line.productId))).size === this.orderLines.length &&
+      Object.values(this.addressForm).every(value => !!value.trim()),
+      'Selecciona cliente y productos sin duplicados, cantidades válidas y una dirección completa.')) return;
     await this.act('Pedido creado', async () => {
       const order = await this.post<Order>(`${this.companyUrl}/orders`, {
         customerId: Number(this.orderCustomerId), deliveryAddress: this.addressForm, items: this.orderLines,
@@ -450,10 +526,12 @@ export class App implements OnInit {
   async selectOrder(id: number): Promise<void> {
     if (this.selectedOrderId !== id) this.allocations = [];
     this.selectedOrderId = id;
+    const epoch = this.sessionEpoch;
     try {
       const [order, shipments] = await Promise.all([
         this.get<Order>(`/api/orders/${id}`), this.get<Shipment[]>(`/api/orders/${id}/shipments`),
       ]);
+      if (epoch !== this.sessionEpoch || id !== this.selectedOrderId) return;
       this.replaceOrder(order);
       this.shipments = shipments;
       if (order.status === 'DRAFT') await this.reloadAllStocks();
@@ -463,9 +541,12 @@ export class App implements OnInit {
       for (const line of order.items) {
         this.shipmentQuantities[line.id] = this.remainingByLine[line.id];
       }
+    } catch (error) {
+      if (epoch === this.sessionEpoch) this.error = apiErrorMessage(error);
     } finally { this.changeDetector.markForCheck(); }
   }
   async confirmOrder(): Promise<void> {
+    if (!this.validate(this.allocationsValid, 'La reserva debe cubrir todas las líneas sin superar el stock disponible.')) return;
     await this.act('Pedido confirmado y stock reservado', async () => {
       const allocated = this.allocations.map(a => ({ ...a }));
       const order = await this.post<Order>(`/api/orders/${this.selectedOrderId}/confirm`, {
@@ -489,6 +570,13 @@ export class App implements OnInit {
     });
   }
   async shipOrder(): Promise<void> {
+    const order = this.selectedOrder;
+    const remaining = this.remainingByLine;
+    const quantities = order?.items.map(line => Number(this.shipmentQuantities[line.id])) || [];
+    if (!this.validate(!!order && positiveInteger(this.shipmentForm.warehouseId) &&
+      quantities.some(quantity => quantity > 0) && quantities.every((quantity, index) =>
+        Number.isSafeInteger(quantity) && quantity >= 0 && quantity <= remaining[order.items[index].id]),
+      'Selecciona un almacén y cantidades entre cero y las unidades pendientes.')) return;
     await this.act('Envío registrado', async () => {
       const items = this.selectedOrder!.items
         .filter(line => Number(this.shipmentQuantities[line.id]) > 0)
@@ -509,6 +597,10 @@ export class App implements OnInit {
     });
   }
   async returnStock(): Promise<void> {
+    const line = this.shipments.flatMap(shipment => shipment.items).find(item => item.id === Number(this.returnForm.shipmentItemId));
+    if (!this.validate(!!line && positiveInteger(this.returnForm.quantity) &&
+      this.returnForm.quantity <= line.quantity - line.returnedQuantity && !!this.returnForm.reason.trim(),
+      'Selecciona una línea enviada, una cantidad pendiente y un motivo.')) return;
     await this.act('Devolución registrada', async () => {
       await this.post(`/api/orders/${this.selectedOrderId}/returns`, this.returnForm);
       this.shipments = await this.get<Shipment[]>(`/api/orders/${this.selectedOrderId}/shipments`);
@@ -517,6 +609,8 @@ export class App implements OnInit {
     });
   }
   async createUser(): Promise<void> {
+    if (!this.validate(!!this.userForm.username.trim() && passwordIsValid(this.userForm.password),
+      'Introduce un usuario y una contraseña de al menos 14 caracteres y hasta 72 bytes UTF-8.')) return;
     await this.act('Usuario creado', async () => {
       const password = this.userForm.password;
       const user = await this.post<User>('/api/users', this.userForm);
@@ -534,13 +628,19 @@ export class App implements OnInit {
     });
   }
   async changePassword(): Promise<void> {
+    if (!this.validate(!!this.passwordForm.currentPassword && passwordIsValid(this.passwordForm.newPassword) &&
+      this.passwordForm.currentPassword !== this.passwordForm.newPassword,
+      'Introduce la contraseña actual y una nueva de 14 a 72 bytes UTF-8.')) return;
     await this.act('Contraseña actualizada. Inicia sesión de nuevo.', async () => {
       await this.post('/api/users/change-password', this.passwordForm);
       this.passwordForm = { currentPassword: '', newPassword: '' };
       this.logout();
+      this.notice = 'Contraseña actualizada. Inicia sesión de nuevo.';
     });
   }
   async resetPassword(): Promise<void> {
+    if (!this.validate(positiveInteger(this.resetUserId) && passwordIsValid(this.resetPasswordValue),
+      'Selecciona un usuario y una contraseña de al menos 14 caracteres y hasta 72 bytes UTF-8.')) return;
     await this.act('Contraseña restablecida. Comparte estas credenciales por un canal seguro.', async () => {
       const password = this.resetPasswordValue;
       const user = await this.post<User>(`/api/users/${this.resetUserId}/reset-password`,

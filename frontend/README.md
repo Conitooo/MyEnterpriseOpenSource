@@ -13,11 +13,13 @@ Abre `http://127.0.0.1:4200`. El servidor Angular reenvía las peticiones `/api`
 
 Si `pnpm` no está disponible en otra máquina, usa `corepack pnpm install` y `corepack pnpm start` desde esta carpeta.
 
-En el primer arranque local, el backend crea un administrador y guarda sus credenciales en `.local/credentials.txt`. El JWT se conserva durante la sesión de la pestaña y expira a los 15 minutos.
+En el primer arranque local, el backend crea un administrador y guarda sus credenciales en `.local/credentials.txt`. El JWT se conserva solo en memoria, expira según el tiempo devuelto por la API y se elimina al cerrar o recargar la pestaña. Después de recargar hay que iniciar sesión de nuevo. Esto evita dejar el token en `localStorage` o `sessionStorage`.
+
+El build de producción activa la CSP de Angular. Al servir el front con `compose.yaml`, Nginx añade cabeceras de seguridad y evita almacenar respuestas de la API. La configuración de desarrollo de `pnpm start` no reproduce esas cabeceras: usa el contenedor para verificarlas.
 
 ```powershell
 pnpm build
 pnpm test --watch=false
 ```
 
-La compilación optimizada queda en `dist/frontend/`.
+La compilación optimizada queda en `dist/frontend/`. Las pruebas se ejecutan con un único worker para evitar bloqueos de Vitest en Windows.

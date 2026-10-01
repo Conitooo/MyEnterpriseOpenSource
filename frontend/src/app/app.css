@@ -19,4 +19,9 @@
 :host .delivery-summary strong { color: #244d3e; font-size: 13px; }
 :host hr { border: 0; border-top: 1px solid #e8efec; margin: 25px 0; }
 :host .shipment-list small { color: #82939a; }
+:host .loading-banner { margin-bottom: 16px; padding: 11px 15px; border: 1px solid #b7d6ca; border-radius: 8px; color: #205c48; background: #eaf6f0; font-weight: 600; }
+:host .skip-link { position: fixed; z-index: 1000; top: -100px; left: 12px; padding: 10px 14px; background: #ffffff; color: #174b3a; border: 2px solid #174b3a; border-radius: 6px; }
+:host .skip-link:focus { top: 12px; }
+:host :is(button, input, select, a):focus-visible { outline: 3px solid #187a5e; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { :host *, :host *::before, :host *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 @media(max-width:750px) { :host .search-row { flex-wrap: wrap; } :host .search-row select { max-width: none; flex: 1; } }

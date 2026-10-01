@@ -101,7 +101,7 @@ describe('actualización de la pantalla de acceso', () => {
     fixture.detectChanges();
 
     const login = app.login();
-    http.expectOne('/api/auth/login').flush({ accessToken: 'test-token' });
+    http.expectOne('/api/auth/login').flush({ accessToken: 'test-token', expiresIn: 900 });
     await new Promise(resolve => setTimeout(resolve, 0));
     http.expectOne('/api/auth/me').flush({
       id: 2, companyId: 1, username: 'pruebas', role: 'VIEWER', active: true,
@@ -132,7 +132,7 @@ describe('actualización de la pantalla de acceso', () => {
     await fixture.whenStable();
 
     expect(fixture.nativeElement.querySelector('.login-shell .alert.error')?.textContent)
-      .toContain('Invalid credentials');
+      .toContain('Credenciales incorrectas');
     http.verify();
   });
 });
@@ -181,6 +181,20 @@ describe('nuevos flujos operativos', () => {
     request.flush({ items: [], total: 0, page: 0, size: 20 });
     await action;
     expect(app.orders).toHaveLength(0);
+    http.verify();
+  });
+
+  it('ignora respuestas antiguas de búsqueda', async () => {
+    app.customerSearch = 'primero';
+    const first = app.loadCustomerPage();
+    app.customerSearch = 'segundo';
+    const second = app.loadCustomerPage();
+    http.expectOne('/api/companies/7/customers?page=0&size=20&q=segundo')
+      .flush({ items: [{ id: 2, companyId: 7, name: 'Segundo', email: null, phone: null, active: true }], total: 1, page: 0, size: 20 });
+    http.expectOne('/api/companies/7/customers?page=0&size=20&q=primero')
+      .flush({ items: [{ id: 1, companyId: 7, name: 'Primero', email: null, phone: null, active: true }], total: 1, page: 0, size: 20 });
+    await Promise.all([first, second]);
+    expect(app.customers.map(customer => customer.name)).toEqual(['Segundo']);
     http.verify();
   });
 
